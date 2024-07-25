@@ -7,7 +7,7 @@
 #include <hardware_interface/joint_command_interface.h>
 #include <hardware_interface/joint_state_interface.h>
 #include <controller_manager/controller_manager.h>
-#include <pass_through_controllers/trajectory_interface.h>
+// #include <pass_through_controllers/trajectory_interface.h>
 #include <algorithm>
 #include <std_msgs/Bool.h>
 #include <std_msgs/Float64.h>
@@ -19,8 +19,8 @@
 
 #include <control_msgs/FollowJointTrajectoryAction.h>
 #include <control_msgs/FollowJointTrajectoryFeedback.h>
-#include <cartesian_control_msgs/FollowCartesianTrajectoryAction.h>
-#include <cartesian_control_msgs/FollowCartesianTrajectoryFeedback.h>
+// #include <cartesian_control_msgs/FollowCartesianTrajectoryAction.h>
+// #include <cartesian_control_msgs/FollowCartesianTrajectoryFeedback.h>
 
 #include <aubo_msgs/IOStates.h>
 #include <aubo_msgs/ToolDataMsg.h>
@@ -28,11 +28,11 @@
 #include <aubo_msgs/SetSpeedSliderFraction.h>
 #include <aubo_msgs/SetPayload.h>
 
-#include <cartesian_interface/cartesian_command_interface.h>
-#include <cartesian_interface/cartesian_state_handle.h>
+// #include <cartesian_interface/cartesian_command_interface.h>
+// #include <cartesian_interface/cartesian_state_handle.h>
 
-#include <speed_scaling_interface/speed_scaling_interface.h>
-#include <scaled_joint_trajectory_controller/scaled_joint_command_interface.h>
+// #include <speed_scaling_interface/speed_scaling_interface.h>
+// #include <scaled_joint_trajectory_controller/scaled_joint_command_interface.h>
 
 #include <aubo_dashboard_msgs/RobotMode.h>
 #include <aubo_dashboard_msgs/SafetyMode.h>
@@ -149,7 +149,7 @@ private:
 
     hardware_interface::JointStateInterface js_interface_;
     hardware_interface::PositionJointInterface pj_interface_;
-    scaled_controllers::ScaledPositionJointInterface spj_interface_;
+    // scaled_controllers::ScaledPositionJointInterface spj_interface_;
     std::array<double, 6> joint_position_command_;
     double speed_scaling_combined_;
     bool controllers_initialized_;

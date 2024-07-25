@@ -26,13 +26,13 @@
   <depend>geometry_msgs</depend>
   <depend>hardware_interface</depend>
   <depend>kdl_parser</depend>
-  <depend>pass_through_controllers</depend>
+  <!-- <depend>pass_through_controllers</depend> -->
   <depend>pluginlib</depend>
   <depend>roscpp</depend>
-  <depend>scaled_joint_trajectory_controller</depend>
+  <!-- <depend>scaled_joint_trajectory_controller</depend> -->
   <depend>sensor_msgs</depend>
-  <depend>speed_scaling_interface</depend>
-  <depend>speed_scaling_state_controller</depend>
+  <!-- <depend>speed_scaling_interface</depend> -->
+  <!-- <depend>speed_scaling_state_controller</depend> -->
   <depend>std_srvs</depend>
   <depend>tf2_geometry_msgs</depend>
   <depend>tf2_msgs</depend>

@@ -47,15 +47,15 @@ find_package(catkin REQUIRED
     industrial_robot_status_interface
     pluginlib
     roscpp
-    scaled_joint_trajectory_controller
+    # scaled_joint_trajectory_controller
     sensor_msgs
-    speed_scaling_interface
-    speed_scaling_state_controller
+    # speed_scaling_interface
+    # speed_scaling_state_controller
     std_srvs
     tf
     tf2_geometry_msgs
     tf2_msgs
-    pass_through_controllers
+    # pass_through_controllers
     kdl_parser
     aubo_dashboard_msgs
     aubo_msgs
@@ -74,13 +74,13 @@ catkin_package(
     geometry_msgs
     hardware_interface
     kdl_parser
-    pass_through_controllers
+    # pass_through_controllers
     pluginlib
     roscpp
-    scaled_joint_trajectory_controller
+    # scaled_joint_trajectory_controller
     sensor_msgs
-    speed_scaling_interface
-    speed_scaling_state_controller
+    # speed_scaling_interface
+    # speed_scaling_state_controller
     std_srvs
     tf
     tf2_geometry_msgs
