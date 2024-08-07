@@ -90,7 +90,9 @@ void AuboHardwareInterface::read(const ros::Time &time,
 void AuboHardwareInterface::write(const ros::Time &time,
                                   const ros::Duration &period)
 {
-    
+
+    // can do speed mode with speedJoint() cmd
+
     try {
             if(position_controller_running_){
                 Servoj(joint_position_command_);

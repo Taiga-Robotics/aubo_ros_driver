@@ -22,7 +22,6 @@ void signalHandler(int signum)
 
 int main(int argc, char **argv)
 {
-    std::string robot_ip_ = "192.168.10.135lm";
     ros::init(argc, argv, "aubo_hardware_interface");
     ros::AsyncSpinner spinner(2);
     spinner.start();
