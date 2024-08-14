@@ -217,11 +217,12 @@
     <property inertia="1.1" damping="0" stiffness="0" offset="0" motor_constant="8.58" ratio="101"/>
   </joint>
 
-  <link name="world" />
+  <!-- <link name="world" />
 
   <joint name="world_joint" type="fixed">
     <parent link="world" />
     <child link = "base_link" />
     <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
-  </joint>
+  </joint> -->
+
 </robot>
