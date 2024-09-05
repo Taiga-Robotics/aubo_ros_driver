@@ -38,9 +38,12 @@ bool AuboHardwareInterface::init(ros::NodeHandle &root_nh,
     rtde_client_->subscribe(topic, [](InputParser &parser) {
         arcs::common_interface::RobotMsgVector msgs;
         msgs = parser.popRobotMsgVector();
+
+        //TODO: nuke below
         for (size_t i = 0; i < msgs.size(); i++) {
             auto &msg = msgs[i];
         }
+        //TODO: nuke above
     });
     // 设置rtde输入
     setInput(rtde_client_);
