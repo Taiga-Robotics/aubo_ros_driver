@@ -43,12 +43,12 @@ void AuboClient::AuboStartup(RpcClientPtr cli)
             if (RobotModeType::Idle == cli->getRobotInterface(robot_name)
                                            ->getRobotState()
                                            ->getRobotModeType()) {
-                ROS_INFO("上电成功:%d\n", cli->getRobotInterface(robot_name)
+                ROS_INFO("上电成功:%d\n", (int)cli->getRobotInterface(robot_name)
                                               ->getRobotState()
                                               ->getRobotModeType());
                 break;
             }
-            ROS_INFO("正在上电:%d\n", cli->getRobotInterface(robot_name)
+            ROS_INFO("正在上电:%d\n", (int) cli->getRobotInterface(robot_name)
                                           ->getRobotState()
                                           ->getRobotModeType());
 
@@ -62,12 +62,12 @@ void AuboClient::AuboStartup(RpcClientPtr cli)
             if (RobotModeType::Running == cli->getRobotInterface(robot_name)
                                               ->getRobotState()
                                               ->getRobotModeType()) {
-                ROS_INFO("松刹车成功:%d\n", cli->getRobotInterface(robot_name)
+                ROS_INFO("松刹车成功:%d\n", (int)cli->getRobotInterface(robot_name)
                                                 ->getRobotState()
                                                 ->getRobotModeType());
                 break;
             }
-            ROS_INFO("正在松刹车:%d\n", cli->getRobotInterface(robot_name)
+            ROS_INFO("正在松刹车:%d\n", (int)cli->getRobotInterface(robot_name)
                                             ->getRobotState()
                                             ->getRobotModeType());
             std::this_thread::sleep_for(std::chrono::seconds(1));
