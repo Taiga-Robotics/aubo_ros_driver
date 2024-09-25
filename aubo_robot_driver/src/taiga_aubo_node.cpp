@@ -14,7 +14,7 @@ using namespace arcs::aubo_sdk;
 using namespace arcs::common_interface;
 
 // my fake class:
-class FakeController : public IROSHardware
+class AuboController : public IROSHardware
 {
     std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray> > cmd_out_;
 
@@ -49,7 +49,7 @@ class FakeController : public IROSHardware
 
 
 
-        FakeController(ros::NodeHandle &node_handle): IROSHardware(node_handle) // example of how to call a specific parent constructor
+        AuboController(ros::NodeHandle &node_handle): IROSHardware(node_handle) // example of how to call a specific parent constructor
         {
 
             //don't waste time if we won't be able to configure this anyways
@@ -74,7 +74,7 @@ class FakeController : public IROSHardware
             hw_state_ = ST_NOT_READY;
 
         }
-        ~FakeController(){};
+        ~AuboController(){};
 
 
         /*
@@ -305,10 +305,10 @@ int main(int argc, char** argv){
     ros::init(argc, argv, "fake_hw_interface");
 
 
-    ROS_DEBUG("[FAKEHW] fake interface node enter");
+    ROS_DEBUG("[AUBO HW] fake interface node enter");
     
     ros::NodeHandle nh; // when launching from a launch file
-    FakeController hw = FakeController(nh);
+    AuboController hw = AuboController(nh);
 
     ros::Publisher hb_pub = nh.advertise<std_msgs::UInt64>("/robot_heartbeat", 1);
     std_msgs::UInt64 hb_msg;
@@ -317,7 +317,7 @@ int main(int argc, char** argv){
     if(hw.getState() == ST_FINAL || hw.getState() == ST_ERROR)
         return -5;
 
-    std::cout<<"[FAKEHW] created STATE: " << hw.getState() << std::endl;
+    std::cout<<"[AUBO HW] created STATE: " << hw.getState() << std::endl;
     //init
     if(hw.configure()!=0){
         //TODO: handle if returned false
@@ -325,10 +325,10 @@ int main(int argc, char** argv){
     }
 
     if(hw.getState() != ST_INACTIVE){
-        ROS_ERROR("[FAKEHW] could not completley configure robot. Terminating");
+        ROS_ERROR("[AUBO HW] could not completley configure robot. Terminating");
         return -6;
     }
-    std::cout<<"[FAKEHW] configured STATE: " << hw.getState() << std::endl;
+    std::cout<<"[AUBO HW] configured STATE: " << hw.getState() << std::endl;
     
 
     //make a controller manager (ONLY CREAT THIS WHEN THE HW IS READY TO GO)
@@ -343,7 +343,7 @@ int main(int argc, char** argv){
     ros::Time last;
     ros::Duration dt;
 
-    std::cout<<"[FAKEHW] <frequency> " << hw.getControlHz() <<std::endl;
+    std::cout<<"[AUBO HW] <frequency> " << hw.getControlHz() <<std::endl;
 
     //ENABLE TORQUE
     if(hw.activate() != 0){
@@ -352,7 +352,7 @@ int main(int argc, char** argv){
     }
     
 
-    ROS_INFO("[FAKEHW] ENTERING MAIN CONTROL LOOP");
+    ROS_INFO("[AUBO HW] ENTERING MAIN CONTROL LOOP");
     while(ros::ok()){
         
         last = now;
@@ -392,7 +392,7 @@ int main(int argc, char** argv){
         return -1;
     }
 
-    ROS_DEBUG("[FAKEHW] exit");
+    ROS_DEBUG("[AUBO HW] exit");
 
     return 0;
 
