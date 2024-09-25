@@ -13,7 +13,7 @@
 using namespace arcs::aubo_sdk;
 using namespace arcs::common_interface;
 
-// my fake class:
+// my aubo class:
 class AuboController : public IROSHardware
 {
     std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray> > cmd_out_;
@@ -36,6 +36,7 @@ class AuboController : public IROSHardware
         SafetyModeType safety_mode_ = SafetyModeType::Normal;
         RuntimeState runtime_state_ = RuntimeState::Stopped;
         int line_{ -1 };
+        bool rtde_data_valid_=false;
 
         //other
         std::vector<double> actual_qd_{ std::vector<double>(6, 0) };
@@ -60,14 +61,14 @@ class AuboController : public IROSHardware
             control_hz_ = 500;
 
             //make w/e you need to here.
-            std::cout<<"Fake Controller Constructor\n";
+            std::cout<<"aubo Controller Constructor\n";
             std::cout<<"----------------------------\n";
             std::cout<<"num joints: " << num_joints_<<std::endl;
             std::cout<<"frequency: " << control_hz_<<std::endl;
             std::cout<<"----------------------------\n";
 
             // realtime publisher
-            cmd_out_.reset(new realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray>(node_handle, "fake_hw_cmd_out", 1));
+            cmd_out_.reset(new realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray>(node_handle, "aubo_hw_cmd_out", 1));
             cmd_out_->msg_.data.resize(num_joints_);
 
             //not readu at the end, because it needs to init--> recieve some data, and wait for controllers to load.
@@ -84,14 +85,18 @@ class AuboController : public IROSHardware
 
             {
                 std::unique_lock<std::mutex> lck(rtde_mtx_);
-                joint_pos_[0] = actual_q_[0];
-                joint_pos_[1] = actual_q_[1];
-                joint_pos_[2] = actual_q_[2];
-                joint_pos_[3] = actual_q_[3];
-                joint_pos_[4] = actual_q_[4];
-                joint_pos_[5] = actual_q_[5];
+                if (rtde_data_valid_)
+                {
+                    joint_pos_[0] = actual_q_[0];
+                    joint_pos_[1] = actual_q_[1];
+                    joint_pos_[2] = actual_q_[2];
+                    joint_pos_[3] = actual_q_[3];
+                    joint_pos_[4] = actual_q_[4];
+                    joint_pos_[5] = actual_q_[5];
+                    rtde_data_valid_ = false;
+                    data_valid_ = true; //latch for now
+                }
             }
-			data_valid_ = true;
             ROS_DEBUG_THROTTLE(1,"[HW] [read]");
             return 0;
         };
@@ -109,17 +114,24 @@ class AuboController : public IROSHardware
                 ROS_DEBUG_THROTTLE(1, "[HW] [write] MD_POSITION");
                 double target_time = 2.0/control_hz_;
                 ret=robot_interface_->getMotionControl()->servoJoint(joint_pos_cmd_, 31.4, 3.14, target_time, 1.0, 1.0);
+
+                //publish the cmd that we received at full loop rate for now.
+                if (cmd_out_->trylock()){
+                    for(int jid=0; jid<num_joints_; jid++) cmd_out_->msg_.data[jid]=joint_pos_cmd_[jid];
+                }
+                cmd_out_->unlockAndPublish();
+
+            }
+            else if (robot_cmd_mode_==MD_NONE)
+            {
+                // roscontrol is idle, this is fine.
+                ret=0;
             }
             else
             {
                 ROS_DEBUG_THROTTLE(10, "[HW] [write] Unsupported Mode");
+                ret=-9;
             }
-
-            //publish the cmd that we received at full loop rate for now.
-            if (cmd_out_->trylock()){
-                for(int jid=0; jid<num_joints_; jid++) cmd_out_->msg_.data[jid]=joint_pos_cmd_[jid];
-            }
-            cmd_out_->unlockAndPublish();
 
             return ret;
         };
@@ -177,6 +189,7 @@ class AuboController : public IROSHardware
                     runtime_state_ = parser.popRuntimeState();
                     line_ = parser.popInt32();
                     actual_TCP_pose_ = parser.popVectorDouble();
+                    rtde_data_valid_=true;
                 });
 
             // get RPC robot interface handle
@@ -226,10 +239,13 @@ class AuboController : public IROSHardware
 
 
         /*
-            ACTIVATE() - The main loop must start within 5 sampling cycles after calling activate()
+            ACTIVATE() 
+                - The main loop must start within 5 sampling cycles after calling activate()
+                - activate stalls for ~15ms waiting for the robot to transition to the correct mode
         */
         int activate(){
             // begin servoj mode
+            ROS_INFO("ACTIVATING");
             robot_interface_->getMotionControl()->setServoMode(true);
             int i = 0;
             while (!robot_interface_->getMotionControl()->isServoModeEnabled()) {
@@ -302,10 +318,10 @@ int main(int argc, char** argv){
         //ros::console::notifyLoggerLevelsChanged();
     //}
 
-    ros::init(argc, argv, "fake_hw_interface");
+    ros::init(argc, argv, "aubo_hw_interface");
 
 
-    ROS_DEBUG("[AUBO HW] fake interface node enter");
+    ROS_DEBUG("[AUBO HW] aubo interface node enter");
     
     ros::NodeHandle nh; // when launching from a launch file
     AuboController hw = AuboController(nh);
@@ -325,13 +341,13 @@ int main(int argc, char** argv){
     }
 
     if(hw.getState() != ST_INACTIVE){
-        ROS_ERROR("[AUBO HW] could not completley configure robot. Terminating");
+        ROS_ERROR("[AUBO HW] could not completely configure robot. Terminating");
         return -6;
     }
     std::cout<<"[AUBO HW] configured STATE: " << hw.getState() << std::endl;
     
 
-    //make a controller manager (ONLY CREAT THIS WHEN THE HW IS READY TO GO)
+    //make a controller manager (ONLY CREATE THIS WHEN THE HW IS READY TO GO)
     controller_manager::ControllerManager cm(&hw, nh);
     //start non "RT" thread (cause this one can get locked)
     ros::AsyncSpinner spinner(1);
@@ -347,11 +363,11 @@ int main(int argc, char** argv){
 
     //ENABLE TORQUE
     if(hw.activate() != 0){
-        //TODO: handle
+        //Bail for now. should be able to kick over into inactive mode and recover.
         return -1;
     }
     
-
+    int ret;
     ROS_INFO("[AUBO HW] ENTERING MAIN CONTROL LOOP");
     while(ros::ok()){
         
@@ -361,7 +377,11 @@ int main(int argc, char** argv){
 
         hw.read(dt);
         cm.update(now,dt);
-        hw.write(dt);
+        ret = hw.write(dt);
+        if (ret==-13)
+        {
+            hw.activate();
+        }
 
         hb_msg.data++;
         hb_pub.publish(hb_msg);
