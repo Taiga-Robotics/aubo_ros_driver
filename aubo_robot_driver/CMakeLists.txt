@@ -18,9 +18,11 @@ set(ENV{CPM_SOURCE_CACHE} $ENV{HOME}/.cache/CPM)
         include(FetchContent)
         FetchContent_Declare(
             aubo_sdk
-            #URL "https://download.aubo-robotics.cn/sdk/aubo_sdk-0.19.2-Linux_x86_64+a90aefb.zip"
+            # URL "https://download.aubo-robotics.cn/sdk/aubo_sdk-0.19.2-Linux_x86_64+a90aefb.zip"
             # URL "https://download.aubo-robotics.cn/sdk/aubo_sdk-0.22.1-Linux_x86_64+2ed0c14.zip"
-            URL "https://s3.ca-central-1.wasabisys.com/synapse--public/aubo_sdk-0.22.1-Linux_x86_64+2ed0c14.zip"
+            # URL "https://s3.ca-central-1.wasabisys.com/synapse--public/aubo_sdk-0.22.1-Linux_x86_64+2ed0c14.zip"
+          # URL "https://download.aubo-robotics.cn/sdk/aubo_sdk-0.22.4-Linux_x86_64+17501f8.zip"
+          URL "/home/iris/catkin/x3_kings_pastry/src/aubo_sdk-0.22.4-Linux_x86_64+17501f8.zip"
         )
         FetchContent_Populate(aubo_sdk)
     endif()
