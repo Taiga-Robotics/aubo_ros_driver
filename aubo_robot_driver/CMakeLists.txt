@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 2.8.12)
+cmake_minimum_required(VERSION 3.5)
 set(CMAKE_CXX_STANDARD 17)
 cmake_policy(SET CMP0097 NEW)
 project(aubo_robot_driver)
@@ -20,7 +20,9 @@ set(ENV{CPM_SOURCE_CACHE} $ENV{HOME}/.cache/CPM)
             aubo_sdk
             #URL "https://download.aubo-robotics.cn/sdk/aubo_sdk-0.19.2-Linux_x86_64+a90aefb.zip"
             # URL "https://download.aubo-robotics.cn/sdk/aubo_sdk-0.22.1-Linux_x86_64+2ed0c14.zip"
-            URL "https://s3.ca-central-1.wasabisys.com/synapse--public/aubo_sdk-0.22.1-Linux_x86_64+2ed0c14.zip"
+            # URL "https://s3.ca-central-1.wasabisys.com/synapse--public/aubo_sdk-0.22.1-Linux_x86_64+2ed0c14.zip"
+            # URL "/home/sparkie/Downloads/aubo_sdk-0.24.0-Linux_x86_64+96a45ac.zip"
+          URL "/home/sparkie/Downloads/aubo_sdk-0.22.4-Linux_x86_64+17501f8.zip"
         )
         FetchContent_Populate(aubo_sdk)
     endif()
@@ -60,6 +62,7 @@ find_package(catkin REQUIRED
     kdl_parser
     aubo_dashboard_msgs
     aubo_msgs
+    ros_control_hw_interface
 )
 find_package(Boost REQUIRED)
 find_package(Threads REQUIRED)
@@ -123,19 +126,20 @@ add_executable(aubo_client_node
   src/aubo_client_node.cpp
 )
 
+add_executable(taiga_aubo_node 
+  src/taiga_aubo_node.cpp
+)
+
 target_link_libraries(aubo_robot_driver_node PUBLIC ${catkin_LIBRARIES} aubo_sdk::aubo_sdk Threads::Threads )
 add_dependencies(aubo_robot_driver_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 target_link_libraries(aubo_client_node PUBLIC ${catkin_LIBRARIES} aubo_sdk::aubo_sdk Threads::Threads )
 add_dependencies(aubo_client_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
-install(TARGETS aubo_client_node
-  ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
-  LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
-  RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
-)
+target_link_libraries(taiga_aubo_node PUBLIC ${catkin_LIBRARIES} aubo_sdk::aubo_sdk Threads::Threads )
+add_dependencies(aubo_client_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
-install(TARGETS aubo_robot_driver_node
+install(TARGETS aubo_client_node aubo_robot_driver_node taiga_aubo_node
   ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
