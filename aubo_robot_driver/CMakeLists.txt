@@ -62,8 +62,11 @@ find_package(catkin REQUIRED
     kdl_parser
     aubo_dashboard_msgs
     aubo_msgs
+    ### taiga specific packages:
     ros_control_hw_interface
+    iris_support_msgs
 )
+
 find_package(Boost REQUIRED)
 find_package(Threads REQUIRED)
 catkin_package(

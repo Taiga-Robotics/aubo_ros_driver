@@ -3,7 +3,12 @@
 #include <ros/ros.h>
 #include <realtime_tools/realtime_publisher.h>
 #include "std_msgs/Float64MultiArray.h"
+#include <std_msgs/Int64.h>
 #include <std_msgs/UInt64.h>
+#include <std_msgs/Bool.h>
+#include <std_srvs/Trigger.h>
+#include <aubo_msgs/SetPayload.h>
+#include <aubo_msgs/SetIO.h>
 #include <ros/console.h>
 #include <ros_control_hw_interface/IROSHardware.h>
 
@@ -16,12 +21,12 @@ using namespace arcs::common_interface;
 // my aubo class:
 class AuboController : public IROSHardware
 {
-    std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray> > cmd_out_;
-
+    //TODO: sort out public and private later.
     public:
         JointCmdMode robot_cmd_mode_ = MD_NONE;
+        bool estopped_;
         
-        std::shared_ptr<RpcClient> rpc_cli;
+        std::shared_ptr<RpcClient> rpc_cli_;
         std::shared_ptr<RtdeClient> rtde_client_;
         std::string robot_ip_ = "192.168.100.3";
         std::string robot_name_;
@@ -29,17 +34,23 @@ class AuboController : public IROSHardware
 
         // RTDE subscriber data:
         std::mutex rtde_mtx_;
-        std::vector<double> actual_q_{ std::vector<double>(6, 0) };
-        std::vector<double> actual_current_{ std::vector<double>(6, 0.1) };
+        std::vector<double> actual_q_{ std::vector<double>(6, 0.) };
+        std::vector<double> actual_qd_{ std::vector<double>(6, 0.) };
         std::vector<double> actual_TCP_pose_{ std::vector<double>(6, 0.) };
         RobotModeType robot_mode_ = RobotModeType::NoController;
         SafetyModeType safety_mode_ = SafetyModeType::Normal;
         RuntimeState runtime_state_ = RuntimeState::Stopped;
         int line_{ -1 };
         bool rtde_data_valid_=false;
+        // RTDE IO data
+        std::mutex rtde_input_mtx_;
+        uint64_t IO_inputs_;
+        uint64_t TOOL_IO_inputs_;
+        bool rtde_input_data_valid_=false;
 
         //other
-        std::vector<double> actual_qd_{ std::vector<double>(6, 0) };
+        std::vector<double> actual_joint_torque_{ std::vector<double>(6, 0.) };
+        std::vector<double> actual_current_{ std::vector<double>(6, 0.1) };
         std::vector<double> target_q_{ std::vector<double>(6, 0) };
         std::vector<double> target_qd_{ std::vector<double>(6, 0) };
         std::vector<double> actual_current_e{ std::vector<double>(6, 0) };
@@ -50,11 +61,24 @@ class AuboController : public IROSHardware
 
 
 
+        // ROS Publishers, Services and subscribers
+        std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray> > cmd_out_pub_;
+        std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Bool> > estop_pub_;
+        std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Int64> > robot_mode_pub_;
+        std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Int64> > safety_mode_pub_;
+        std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Int64> > runtime_state_pub_;
+        std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::UInt64> > IO_inputs_pub_;
+        std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::UInt64> > TOOL_IO_inputs_pub_;
+        ros::ServiceServer go_op_svc_;
+        ros::ServiceServer set_load_svc_;
+        ros::ServiceServer set_IO_output_svc_;
+
+
         AuboController(ros::NodeHandle &node_handle): IROSHardware(node_handle) // example of how to call a specific parent constructor
         {
 
             //don't waste time if we won't be able to configure this anyways
-            //base class errors shoudl be informative enough
+            //base class errors should be informative enough
             if(hw_state_== ST_ERROR || hw_state_ == ST_FINAL)
                 return;
 
@@ -68,10 +92,13 @@ class AuboController : public IROSHardware
             std::cout<<"----------------------------\n";
 
             // realtime publisher
-            cmd_out_.reset(new realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray>(node_handle, "aubo_hw_cmd_out", 1));
-            cmd_out_->msg_.data.resize(num_joints_);
+            cmd_out_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray>(node_handle, "aubo_hw_cmd_out", 1));
+            cmd_out_pub_->msg_.data.resize(num_joints_);
 
-            //not readu at the end, because it needs to init--> recieve some data, and wait for controllers to load.
+            // all the other publishers of robot state and mode and the like
+            init_ancillary_pubs(node_handle);
+
+            //not ready at the end, because it needs to init--> recieve some data, and wait for controllers to load.
             hw_state_ = ST_NOT_READY;
 
         }
@@ -87,12 +114,12 @@ class AuboController : public IROSHardware
                 std::unique_lock<std::mutex> lck(rtde_mtx_);
                 if (rtde_data_valid_)
                 {
-                    joint_pos_[0] = actual_q_[0];
-                    joint_pos_[1] = actual_q_[1];
-                    joint_pos_[2] = actual_q_[2];
-                    joint_pos_[3] = actual_q_[3];
-                    joint_pos_[4] = actual_q_[4];
-                    joint_pos_[5] = actual_q_[5];
+                    for(int jnt=0; jnt<6; jnt++)
+                    {
+                        joint_pos_[jnt] = actual_q_[jnt];
+                        joint_vel_[jnt] = actual_qd_[jnt];
+                        joint_eff_[jnt] = actual_joint_torque_[jnt];
+                    }
                     rtde_data_valid_ = false;
                     data_valid_ = true; //latch for now
                 }
@@ -116,10 +143,10 @@ class AuboController : public IROSHardware
                 ret=robot_interface_->getMotionControl()->servoJoint(joint_pos_cmd_, 31.4, 3.14, target_time, 1.0, 1.0);
 
                 //publish the cmd that we received at full loop rate for now.
-                if (cmd_out_->trylock()){
-                    for(int jid=0; jid<num_joints_; jid++) cmd_out_->msg_.data[jid]=joint_pos_cmd_[jid];
+                if (cmd_out_pub_->trylock()){
+                    for(int jid=0; jid<num_joints_; jid++) cmd_out_pub_->msg_.data[jid]=joint_pos_cmd_[jid];
                 }
-                cmd_out_->unlockAndPublish();
+                cmd_out_pub_->unlockAndPublish();
 
             }
             else if (robot_cmd_mode_==MD_NONE)
@@ -142,38 +169,22 @@ class AuboController : public IROSHardware
         */
         int configure()
         {
+            ROS_INFO("[AUBO HW] Connecting RPC...");
             // set up an RPC client
-            rpc_cli = std::make_shared<RpcClient>();
-            rpc_cli->setRequestTimeout(1000);
-            rpc_cli->connect(robot_ip_, 30004);
-            rpc_cli->login("aubo", "123456");   //no evidence the u/p combo is sent to the robot at any time
+            rpc_cli_ = std::make_shared<RpcClient>();
+            rpc_cli_->setRequestTimeout(1000);  //TODO: perhaps this should be shorter? 
+            rpc_cli_->connect(robot_ip_, 30004);
+            rpc_cli_->login("aubo", "123456");   //no evidence the u/p combo is sent to the robot at any time
 
+            ROS_INFO("[AUBO HW] Connecting RTDE...");
             // set up an RTDE client
             rtde_client_ = std::make_shared<RtdeClient>();
             rtde_client_->connect(robot_ip_, 30010);
             rtde_client_->login("aubo", "123456");
-            int topic = rtde_client_->setTopic(false, { "R1_message" }, 200, 0);
-            if (topic < 0) {
-                std::cout << "Set topic fail!" << std::endl;
-            }
-
-            //this subscribes to R1_message and then unloads it from the queue with no effect on reception. i dont know if this is required.
-/*            rtde_client_->subscribe(topic, [](InputParser &parser) {
-                arcs::common_interface::RobotMsgVector msgs;
-                msgs = parser.popRobotMsgVector();
-
-                //TODO: nuke below
-                for (size_t i = 0; i < msgs.size(); i++) {
-                    auto &msg = msgs[i];
-                }
-                //TODO: nuke above
-            });
-*/
-
-            //not clear if this is required for joint state subscription, i iwll leave it out for now.
-            // setInput(rtde_client_);  
 
             
+            ROS_INFO("[AUBO HW] Starting RTDE Stream...");
+            // subscribe to an RTDE stream for robot position data
             int topic1 = rtde_client_->setTopic(false,
                 { "R1_actual_q", "R1_actual_qd", "R1_robot_mode", "R1_safety_mode",
                 "runtime_state", "line_number", "R1_actual_TCP_pose" },
@@ -181,20 +192,40 @@ class AuboController : public IROSHardware
 
             rtde_client_->subscribe(topic1, [this](InputParser &parser) 
                 {
+                    /* -- THIS ANONYMOUS FUNCTION IS THE CALLBACK THAT HANDLES UNLOADING THE RTDE MESSAGE -- */
                     std::unique_lock<std::mutex> lck(rtde_mtx_);
                     actual_q_ = parser.popVectorDouble();
-                    actual_current_ = parser.popVectorDouble();
+                    actual_qd_ = parser.popVectorDouble();
                     robot_mode_ = parser.popRobotModeType();
                     safety_mode_ = parser.popSafetyModeType();
                     runtime_state_ = parser.popRuntimeState();
                     line_ = parser.popInt32();
                     actual_TCP_pose_ = parser.popVectorDouble();
                     rtde_data_valid_=true;
+                    // process estop bool immediately
+                    if((safety_mode_ == SafetyModeType::Normal) || (safety_mode_ == SafetyModeType::ReducedMode))  
+                        estopped_ = false;
+                    else
+                        estopped_ = true;
+
                 });
 
+            // subscribe to an RTDE stream for IO data @ 20Hz
+            topic1 = rtde_client_->setTopic(false, { "R1_standard_digital_input_bits", "R1_tool_digital_input_bits" }, 20, 1);
+
+            rtde_client_->subscribe(topic1, [this](InputParser &parser) 
+                {
+                    /* -- THIS ANONYMOUS FUNCTION IS THE CALLBACK THAT HANDLES UNLOADING THE RTDE INPUT MESSAGE -- */
+                    std::unique_lock<std::mutex> lck(rtde_input_mtx_);
+                    IO_inputs_ = parser.popInt64();
+                    TOOL_IO_inputs_ = parser.popInt64();
+                    rtde_input_data_valid_=true;
+                });
+
+
             // get RPC robot interface handle
-            robot_name_ = rpc_cli->getRobotNames().front();
-            robot_interface_ = rpc_cli->getRobotInterface(robot_name_);
+            robot_name_ = rpc_cli_->getRobotNames().front();
+            robot_interface_ = rpc_cli_->getRobotInterface(robot_name_);
             
             // set speed, because the example did it too.
             robot_interface_->getMotionControl()->setSpeedFraction(0.3);
@@ -222,9 +253,7 @@ class AuboController : public IROSHardware
 			}
 
             //call parent to do basic stuff
-            bool result = IROSHardware::prepareSwitch(start_list, stop_list);
-            //robot_cmd_mode_ = joint_modes_[0]; // just set the robot control mode to be the mode of the first joint;
-            //ROS_DEBUG("[HW] [prepareSwitch] - <ROBOT MODE: %d>", robot_cmd_mode_);
+            IROSHardware::prepareSwitch(start_list, stop_list);
 
             return true;
         }
@@ -251,7 +280,7 @@ class AuboController : public IROSHardware
             while (!robot_interface_->getMotionControl()->isServoModeEnabled()) {
                 if (i++ > 5) {  //failure condition
                     std::cout << "Failed to enable Servo mode! The current servo status is "
-                              << rpc_cli->getRobotInterface(robot_name_)->getMotionControl()->isServoModeEnabled() << std::endl;
+                              << rpc_cli_->getRobotInterface(robot_name_)->getMotionControl()->isServoModeEnabled() << std::endl;
                     return -1;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -308,15 +337,184 @@ class AuboController : public IROSHardware
             hw_state_ = ST_FINAL;
             return 0;};
 
+        
+        bool waitForRobotMode(RobotModeType target_mode, double max_time = 10.0)
+        {
+            RobotModeType current_mode;
+            double wait_time=0.0;
+
+            do {
+                current_mode = robot_interface_->getRobotState()->getRobotModeType();
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                wait_time+=0.100;
+                if(wait_time>max_time) 
+                {
+                    ROS_WARN("[AUBO HW] Robot mode did not achieve target mode before wait expired.");   //TODO: details
+                    return(false);
+                }
+            } while (current_mode != target_mode);
+            return(true);
+        }
+
+
+        // broken out into a function for easy transplanting back into aubo_ros_driver
+        void init_ancillary_pubs(ros::NodeHandle &node_handle)
+        {
+
+            robot_mode_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::Int64>(node_handle, "robot_mode", 1));
+            robot_mode_pub_->msg_.data=-1000;
+
+            safety_mode_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::Int64>(node_handle, "safety_mode", 1));
+            safety_mode_pub_->msg_.data=-1000;
+
+            runtime_state_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::Int64>(node_handle, "runtime_mode", 1));
+            runtime_state_pub_->msg_.data=-1000;
+
+            estop_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::Bool>(node_handle, "estop", 1));
+            estop_pub_->msg_.data=false;
+
+            IO_inputs_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::UInt64>(node_handle, "io_inputs", 1));
+            IO_inputs_pub_->msg_.data=0;
+
+            TOOL_IO_inputs_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::UInt64>(node_handle, "tool_io_inputs", 1));
+            TOOL_IO_inputs_pub_->msg_.data=0;
+
+            // init srvs
+            go_op_svc_ = node_handle.advertiseService("go_operational", &AuboController::go_op_svc_cb, this);
+            set_load_svc_ = node_handle.advertiseService("set_load", &AuboController::set_load_cb, this);
+            set_IO_output_svc_ = node_handle.advertiseService("set_io_ouput", &AuboController::set_io_output_cb, this);
+        }
+
+
+        void publish_ancillary_data()
+        {
+            // new scope for rtde data republishers because we need to lock the mutex
+            {
+                std::unique_lock<std::mutex> lck(rtde_mtx_);
+                if (robot_mode_pub_->trylock())
+                {
+                    robot_mode_pub_->msg_.data = (int64_t)robot_mode_;
+                }
+                robot_mode_pub_->unlockAndPublish();
+
+                if (safety_mode_pub_->trylock())
+                {
+                    safety_mode_pub_->msg_.data = (int64_t)safety_mode_;
+                }
+                safety_mode_pub_->unlockAndPublish();
+
+                if (runtime_state_pub_->trylock())
+                {
+                    runtime_state_pub_->msg_.data = (int64_t)runtime_state_;
+                }
+                runtime_state_pub_->unlockAndPublish();
+
+            }
+            {
+                //scope for rtde input republisher
+                std::unique_lock<std::mutex> lck(rtde_input_mtx_);
+                if (IO_inputs_pub_->trylock())
+                {
+                    IO_inputs_pub_->msg_.data = (int64_t)IO_inputs_;
+                }
+                IO_inputs_pub_->unlockAndPublish();
+
+                if (TOOL_IO_inputs_pub_->trylock())
+                {
+                    TOOL_IO_inputs_pub_->msg_.data = (int64_t)TOOL_IO_inputs_;
+                }
+                TOOL_IO_inputs_pub_->unlockAndPublish();
+
+            }
+
+
+            if (estop_pub_->trylock())
+            {
+                estop_pub_->msg_.data = estopped_;
+            }
+            estop_pub_->unlockAndPublish();
+
+        }
+
+
+        bool go_op_svc_cb(std_srvs::TriggerRequest &req, std_srvs::TriggerResponse &res)
+        {
+            auto robot_mode = robot_interface_->getRobotState()->getRobotModeType();
+
+            if (robot_mode == RobotModeType::Running) {
+                ROS_INFO("The robot arm has released the brake and is in running mode");
+
+            } else {
+                // Interface call: The robot arm initiates a power-on request
+                // can except, not sure if thatll fail the service or take down the driver
+                auto pret = robot_interface_->getRobotManage()->poweron();
+                if (pret == AUBO_BAD_STATE)
+                {
+                    ROS_ERROR("[AUBO HW] failed to poweron");
+                    return(false);
+                }
+
+                // Wait for the robot arm to enter idle mode
+                waitForRobotMode(RobotModeType::Idle);
+
+                ROS_INFO("The robotic arm is powered on successfully, current mode: %d", (int) robot_interface_->getRobotState()->getRobotModeType() );
+
+                // Interface call: The robot arm initiates a brake release request
+                robot_interface_->getRobotManage()->startup();
+
+                // Wait for the robot arm to enter running mode
+                waitForRobotMode(RobotModeType::Running);
+
+                ROS_INFO("The robot arm released the brake successfully, current mode: %d", (int) robot_interface_->getRobotState()->getRobotModeType());
+            }
+            return(true);
+        }
+
+
+        bool set_load_cb(aubo_msgs::SetPayloadRequest &req, aubo_msgs::SetPayloadResponse &res)
+        {
+            double mass = 0.0;
+            std::vector<double> cog(3, 0.0);
+            std::vector<double> aom(3, 0.0);
+            std::vector<double> inertia(6, 0.0);
+            cog = {req.center_of_gravity.x, req.center_of_gravity.y, req.center_of_gravity.z};
+            mass = req.mass;
+            int setload_ret;
+            setload_ret = robot_interface_->getRobotConfig()->setPayload(mass, cog, aom, inertia);    //TODO: check ret
+            if (setload_ret==0)
+            {
+                res.success = true;
+            }
+            else
+            {
+                ROS_ERROR("Could not set payload. Error Code: %d",setload_ret);
+                res.success = false;
+            }
+            
+            return(res.success);
+        }
+        
+        bool set_io_output_cb(aubo_msgs::SetIORequest &req, aubo_msgs::SetIOResponse &res)
+        {
+            if(req.fun==req.FUN_SET_DIGITAL_OUT)
+            {
+                robot_interface_->getIoControl()->setStandardDigitalOutput(req.pin, req.state);
+            }
+            return(true);
+        }
+        
 };
+
 
 
 int main(int argc, char** argv){
     
-//set logging level to DEBUG
+    //set logging level to DEBUG
     //if(ros::console::set_logger_level(ROSCONSOLE_DEFAULT_NAME, ros::console::Level::Debug)){
         //ros::console::notifyLoggerLevelsChanged();
     //}
+
+    ros::Time last_low_freq_pub_time;
 
     ros::init(argc, argv, "aubo_hw_interface");
 
@@ -368,6 +566,7 @@ int main(int argc, char** argv){
     }
     
     int ret;
+    last_low_freq_pub_time = ros::Time::now();
     ROS_INFO("[AUBO HW] ENTERING MAIN CONTROL LOOP");
     while(ros::ok()){
         
@@ -378,13 +577,22 @@ int main(int argc, char** argv){
         hw.read(dt);
         cm.update(now,dt);
         ret = hw.write(dt);
+        // catch the case where servoj commands were interrupted and the robot falls out of servoj mode
         if (ret==-13)
         {
             hw.activate();
         }
 
+        // maintain robot heartbeat
         hb_msg.data++;
         hb_pub.publish(hb_msg);
+
+        // maintain robot ancillary data
+        if((now - last_low_freq_pub_time) > ros::Duration((1.0/20.0)))
+        {
+            hw.publish_ancillary_data();
+            last_low_freq_pub_time += ros::Duration((1.0/20.0));
+        }
 
         _rate.sleep();
 
@@ -393,7 +601,7 @@ int main(int argc, char** argv){
 
     //shutdown and clean up
 
-    //can roll thuis into shutdown() if you want
+    //can roll this into shutdown() if you want
     if(hw.deactivate() != 0){
         //TODO: handle
         if(hw.procError() != 0){
