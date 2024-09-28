@@ -367,9 +367,11 @@ int exampleServoj3(RpcClientPtr cli)
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 
-    std::vector<double> q1 = { 0.0 * (M_PI / 180), -15.0 * (M_PI / 180),
-                               100.0 * (M_PI / 180),  25.0 * (M_PI / 180),
-                               90.0 * (M_PI / 180),   0.0 * (M_PI / 180) };
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+    std::vector<double> q1 = { -172 * (M_PI / 180), -6.0 * (M_PI / 180),
+                               121.0 * (M_PI / 180),  -11. * (M_PI / 180),
+                               83.0 * (M_PI / 180),   0.0 * (M_PI / 180) };
     std::cout << "向第一个目标点运动" << std::endl;
     // 接口调用: 关节伺服运动
     auto start = std::chrono::system_clock::now();

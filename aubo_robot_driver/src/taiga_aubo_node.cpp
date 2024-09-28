@@ -23,8 +23,11 @@ class AuboController : public IROSHardware
 {
     //TODO: sort out public and private later.
     public:
-        JointCmdMode robot_cmd_mode_ = MD_NONE;
+        JointCmdMode last_robot_cmd_mode_ = MD_NONE, robot_cmd_mode_ = MD_NONE; // also used to determine whether to be in servoj mode or not
         bool estopped_;
+        bool use_servoj_mode_=false;
+
+        long int activates_=0;
         
         std::shared_ptr<RpcClient> rpc_cli_;
         std::shared_ptr<RtdeClient> rtde_client_;
@@ -34,6 +37,7 @@ class AuboController : public IROSHardware
 
         // RTDE subscriber data:
         std::mutex rtde_mtx_;
+        double timestamp_=0.0, last_rtde_timestamp_=-1.0;
         std::vector<double> actual_q_{ std::vector<double>(6, 0.) };
         std::vector<double> actual_qd_{ std::vector<double>(6, 0.) };
         std::vector<double> actual_TCP_pose_{ std::vector<double>(6, 0.) };
@@ -42,6 +46,8 @@ class AuboController : public IROSHardware
         RuntimeState runtime_state_ = RuntimeState::Stopped;
         int line_{ -1 };
         bool rtde_data_valid_=false;
+        RobotMsg robotmsg_;
+
         // RTDE IO data
         std::mutex rtde_input_mtx_;
         uint64_t IO_inputs_;
@@ -72,6 +78,10 @@ class AuboController : public IROSHardware
         ros::ServiceServer go_op_svc_;
         ros::ServiceServer set_load_svc_;
         ros::ServiceServer set_IO_output_svc_;
+        ros::ServiceServer clear_protective_stop_svc_;
+        ros::ServiceServer servomode_on_svc_;
+        ros::ServiceServer servomode_off_svc_;
+        ros::ServiceServer get_servomode_svc;
 
 
         AuboController(ros::NodeHandle &node_handle): IROSHardware(node_handle) // example of how to call a specific parent constructor
@@ -82,7 +92,8 @@ class AuboController : public IROSHardware
             if(hw_state_== ST_ERROR || hw_state_ == ST_FINAL)
                 return;
 
-            control_hz_ = 500;
+            control_hz_ = 100;
+            // control_hz_ = 500;
 
             //make w/e you need to here.
             std::cout<<"aubo Controller Constructor\n";
@@ -109,11 +120,13 @@ class AuboController : public IROSHardware
             READ()
         */
         int read(ros::Duration &dt){
-
+            int ret=-1;
             {
                 std::unique_lock<std::mutex> lck(rtde_mtx_);
+                // if (rtde_data_valid_ && timestamp_ > last_rtde_timestamp_)
                 if (rtde_data_valid_)
                 {
+                    last_rtde_timestamp_ = timestamp_;
                     for(int jnt=0; jnt<6; jnt++)
                     {
                         joint_pos_[jnt] = actual_q_[jnt];
@@ -122,10 +135,11 @@ class AuboController : public IROSHardware
                     }
                     rtde_data_valid_ = false;
                     data_valid_ = true; //latch for now
+                    ret=0;
                 }
             }
-            ROS_DEBUG_THROTTLE(1,"[HW] [read]");
-            return 0;
+
+            return ret;
         };
 
 
@@ -133,9 +147,10 @@ class AuboController : public IROSHardware
             WRITE()
         */
         int write(ros::Duration &dt){
-            int ret=-9;
-            ROS_DEBUG_THROTTLE(1, "[HW] [write]");
+            int ret=0;
             enforceLimit(dt); // will work with pos/vel/effort, depending on configuration
+
+            if(estopped_) return(0);
 
             if(robot_cmd_mode_==MD_POSITION){
                 ROS_DEBUG_THROTTLE(1, "[HW] [write] MD_POSITION");
@@ -186,7 +201,7 @@ class AuboController : public IROSHardware
             ROS_INFO("[AUBO HW] Starting RTDE Stream...");
             // subscribe to an RTDE stream for robot position data
             int topic1 = rtde_client_->setTopic(false,
-                { "R1_actual_q", "R1_actual_qd", "R1_robot_mode", "R1_safety_mode",
+                { "timestamp", "R1_actual_q", "R1_actual_qd", "R1_robot_mode", "R1_safety_mode",
                 "runtime_state", "line_number", "R1_actual_TCP_pose" },
                 control_hz_, 0);
 
@@ -194,6 +209,7 @@ class AuboController : public IROSHardware
                 {
                     /* -- THIS ANONYMOUS FUNCTION IS THE CALLBACK THAT HANDLES UNLOADING THE RTDE MESSAGE -- */
                     std::unique_lock<std::mutex> lck(rtde_mtx_);
+                    timestamp_ = parser.popDouble();    
                     actual_q_ = parser.popVectorDouble();
                     actual_qd_ = parser.popVectorDouble();
                     robot_mode_ = parser.popRobotModeType();
@@ -203,7 +219,7 @@ class AuboController : public IROSHardware
                     actual_TCP_pose_ = parser.popVectorDouble();
                     rtde_data_valid_=true;
                     // process estop bool immediately
-                    if((safety_mode_ == SafetyModeType::Normal) || (safety_mode_ == SafetyModeType::ReducedMode))  
+                    if(((safety_mode_ == SafetyModeType::Normal) || (safety_mode_ == SafetyModeType::ReducedMode)) && (robot_mode_ == RobotModeType::Running))  
                         estopped_ = false;
                     else
                         estopped_ = true;
@@ -228,7 +244,7 @@ class AuboController : public IROSHardware
             robot_interface_ = rpc_cli_->getRobotInterface(robot_name_);
             
             // set speed, because the example did it too.
-            robot_interface_->getMotionControl()->setSpeedFraction(0.3);
+            robot_interface_->getMotionControl()->setSpeedFraction(1.0);
         
             // ---- SERVOJ mode activation moved to activate() due to timing concerns. ----
 
@@ -262,9 +278,21 @@ class AuboController : public IROSHardware
 		void doSwitch(const std::list<hardware_interface::ControllerInfo> &start_list,
 					const std::list<hardware_interface::ControllerInfo> &stop_list){
             robot_cmd_mode_ = joint_modes_[0]; // just set the robot control mode to be the mode of the first joint;
-			ROS_DEBUG("[HW] [doSwitch]: ROBOT MODE: %d", robot_cmd_mode_);
-			ROS_INFO("[HW] [doSwitch]: Switching Controllers . . . ");
-		}
+			ROS_INFO("[HW] [doSwitch]: Switching Controllers, mode == %d", robot_cmd_mode_);
+		
+            //enter servoj mode
+            if (last_robot_cmd_mode_!=robot_cmd_mode_) 
+            {
+                if (robot_cmd_mode_==MD_POSITION)
+                {
+                    activate();
+                }else
+                {
+                    deactivate();
+                }
+            }
+            last_robot_cmd_mode_=robot_cmd_mode_;
+        }
 
 
         /*
@@ -274,21 +302,28 @@ class AuboController : public IROSHardware
         */
         int activate(){
             // begin servoj mode
-            ROS_INFO("ACTIVATING");
-            robot_interface_->getMotionControl()->setServoMode(true);
-            int i = 0;
-            while (!robot_interface_->getMotionControl()->isServoModeEnabled()) {
-                if (i++ > 5) {  //failure condition
-                    std::cout << "Failed to enable Servo mode! The current servo status is "
-                              << rpc_cli_->getRobotInterface(robot_name_)->getMotionControl()->isServoModeEnabled() << std::endl;
-                    return -1;
+            if(robot_cmd_mode_ == MD_POSITION && estopped_ == false)
+            {
+                ROS_INFO("[AUBO HW] ACTIVATING... for the %ld time.", ++activates_);
+                int ret = robot_interface_->getMotionControl()->setServoMode(true);
+                if(ret!=0)
+                {
+                    ROS_ERROR("[AUBO HW] Set servo mode failed with error code %d", ret);
+
                 }
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                int i = 0;
+                while (!robot_interface_->getMotionControl()->isServoModeEnabled()) {
+                    if (i++ > 5) {  //failure condition
+                        ROS_ERROR("[AUBO HW] Failed to activate. servo mode enabled is %d", (int)rpc_cli_->getRobotInterface(robot_name_)->getMotionControl()->isServoModeEnabled());
+                        return -1;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                }
             }
-
-
+            ROS_INFO("[AUBO HW] Activated.");
             hw_state_ = ST_ACTIVE;
-            return 0;};
+            return 0;
+        };
 
 
         int deactivate(){
@@ -303,20 +338,20 @@ class AuboController : public IROSHardware
             }
             
             // Turn off servo mode
+            ROS_INFO("[AUBO HW] Deactivating...");
             robot_interface_->getMotionControl()->setServoMode(false);
 
             // Wait for end of servo mode
             int i = 0;
             while (robot_interface_->getMotionControl()->isServoModeEnabled()) {
                 if (i++ > 5) {
-                    std::cout
-                        << "Servo Mode disablement failed! The current Servo mode is "
-                        << robot_interface_->getMotionControl()->isServoModeEnabled()
-                        << std::endl;
+                    ROS_ERROR("[AUBO HW] Failed to deactivate, servo mode enabled is %d", robot_interface_->getMotionControl()->isServoModeEnabled());
                     return -1;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
             }
+
+            ROS_INFO("[AUBO HW] Deactivated.");
 
             hw_state_ = ST_INACTIVE; //return ST_INACTIVE on success
             return 0;
@@ -338,7 +373,7 @@ class AuboController : public IROSHardware
             return 0;};
 
         
-        bool waitForRobotMode(RobotModeType target_mode, double max_time = 10.0)
+        bool waitForRobotMode(RobotModeType target_mode, double max_time = 20.0)
         {
             RobotModeType current_mode;
             double wait_time=0.0;
@@ -367,7 +402,7 @@ class AuboController : public IROSHardware
             safety_mode_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::Int64>(node_handle, "safety_mode", 1));
             safety_mode_pub_->msg_.data=-1000;
 
-            runtime_state_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::Int64>(node_handle, "runtime_mode", 1));
+            runtime_state_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::Int64>(node_handle, "runtime_state", 1));
             runtime_state_pub_->msg_.data=-1000;
 
             estop_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::Bool>(node_handle, "estop", 1));
@@ -383,6 +418,10 @@ class AuboController : public IROSHardware
             go_op_svc_ = node_handle.advertiseService("go_operational", &AuboController::go_op_svc_cb, this);
             set_load_svc_ = node_handle.advertiseService("set_load", &AuboController::set_load_cb, this);
             set_IO_output_svc_ = node_handle.advertiseService("set_io_ouput", &AuboController::set_io_output_cb, this);
+            clear_protective_stop_svc_ = node_handle.advertiseService("clear_protective_stop", &AuboController::clear_protective_stop_cb, this);
+            servomode_on_svc_ = node_handle.advertiseService("servomode_on", &AuboController::servomode_on_cb, this);
+            servomode_off_svc_ = node_handle.advertiseService("servomode_off", &AuboController::servomode_off_cb, this);
+            get_servomode_svc = node_handle.advertiseService("get_servomode", &AuboController::get_servomode_cb, this);
         }
 
 
@@ -405,7 +444,7 @@ class AuboController : public IROSHardware
 
                 if (runtime_state_pub_->trylock())
                 {
-                    runtime_state_pub_->msg_.data = (int64_t)runtime_state_;
+                    runtime_state_pub_->msg_.data = robot_cmd_mode_;//(int64_t)runtime_state_;
                 }
                 runtime_state_pub_->unlockAndPublish();
 
@@ -439,10 +478,14 @@ class AuboController : public IROSHardware
 
         bool go_op_svc_cb(std_srvs::TriggerRequest &req, std_srvs::TriggerResponse &res)
         {
+            res.success=false;
             auto robot_mode = robot_interface_->getRobotState()->getRobotModeType();
-
+            std::string msg;
             if (robot_mode == RobotModeType::Running) {
-                ROS_INFO("The robot arm has released the brake and is in running mode");
+                msg = "The robot arm has released the brake and is in running mode";
+                ROS_INFO("%s",msg.c_str());
+                res.message = msg;
+                res.success = true;
 
             } else {
                 // Interface call: The robot arm initiates a power-on request
@@ -450,14 +493,23 @@ class AuboController : public IROSHardware
                 auto pret = robot_interface_->getRobotManage()->poweron();
                 if (pret == AUBO_BAD_STATE)
                 {
-                    ROS_ERROR("[AUBO HW] failed to poweron");
-                    return(false);
+                    msg = "[AUBO HW] failed to poweron";
+                    ROS_ERROR("%s",msg.c_str());
+                    res.message = msg;
+                    return(res.success);
                 }
 
                 // Wait for the robot arm to enter idle mode
-                waitForRobotMode(RobotModeType::Idle);
+                if(0!=waitForRobotMode(RobotModeType::Idle))
+                {
+                    msg += "::[AUBO HW] Failed to transition to idle after poweron command";
+                    ROS_ERROR("[AUBO HW] Failed to transition to idle after poweron command");
 
-                ROS_INFO("The robotic arm is powered on successfully, current mode: %d", (int) robot_interface_->getRobotState()->getRobotModeType() );
+                }
+
+                int robot_mode = (int) robot_interface_->getRobotState()->getRobotModeType();
+                msg += "::The robotic arm is powered on successfully, current mode: " + std::to_string(robot_mode);
+                ROS_INFO("The robotic arm is powered on successfully, current mode: %d", robot_mode);
 
                 // Interface call: The robot arm initiates a brake release request
                 robot_interface_->getRobotManage()->startup();
@@ -465,9 +517,13 @@ class AuboController : public IROSHardware
                 // Wait for the robot arm to enter running mode
                 waitForRobotMode(RobotModeType::Running);
 
-                ROS_INFO("The robot arm released the brake successfully, current mode: %d", (int) robot_interface_->getRobotState()->getRobotModeType());
+                robot_mode = (int) robot_interface_->getRobotState()->getRobotModeType();
+                msg += "::The robot arm released the brake successfully, current mode: " + std::to_string(robot_mode);
+                ROS_INFO("The robot arm released the brake successfully, current mode: %d", robot_mode);
             }
-            return(true);
+            res.message = msg;
+            res.success = true;
+            return(res.success);
         }
 
 
@@ -503,6 +559,68 @@ class AuboController : public IROSHardware
             return(true);
         }
         
+
+        bool clear_protective_stop_cb(std_srvs::TriggerRequest &req, std_srvs::TriggerResponse &res)
+        {
+            if(0!=robot_interface_->getRobotManage()->setUnlockProtectiveStop())
+            {
+                res.success = false;
+            }else
+            {
+                res.success = true;
+            }
+            
+            return(res.success);
+        }
+
+        bool servomode_on_cb(std_srvs::TriggerRequest &req, std_srvs::TriggerResponse &res)
+        {
+            res.success=false;
+
+            if(0!=activate())
+            {
+                res.message="failed to activate";
+                return(true);
+            }
+            res.success=true;
+            return(true);
+        }
+
+        bool servomode_off_cb(std_srvs::TriggerRequest &req, std_srvs::TriggerResponse &res)
+        {
+            res.success=false;
+
+            if(0!=deactivate())
+            {
+                res.message="failed to deactivate";
+                return(true);
+            }
+            res.success=true;
+            return(true);
+
+        }
+
+        bool get_servomode_cb(std_srvs::TriggerRequest &req, std_srvs::TriggerResponse &res)
+        {
+            res.success=false;
+
+            if(!robot_interface_->getMotionControl()->isServoModeEnabled())
+            {
+                res.success=false;
+                res.message="not enabled";
+                return(true);
+            }
+            res.message="enabled";
+            res.success=true;
+            return(true);
+
+        }
+
+        bool is_estopped()
+        {
+            return(estopped_);
+        }
+
 };
 
 
@@ -560,12 +678,17 @@ int main(int argc, char** argv){
     std::cout<<"[AUBO HW] <frequency> " << hw.getControlHz() <<std::endl;
 
     //ENABLE TORQUE
-    if(hw.activate() != 0){
-        //Bail for now. should be able to kick over into inactive mode and recover.
-        return -1;
-    }
+    std_srvs::TriggerRequest req;
+    std_srvs::TriggerResponse res;
+    hw.go_op_svc_cb(req, res);
+
+    // if(hw.activate() != 0){
+    //     //Bail for now. should be able to kick over into inactive mode and recover.
+    //     // return -1;
+    //     ROS_WARN("could not startup");
+    // }
     
-    int ret;
+    int ret, read_missed=0;
     last_low_freq_pub_time = ros::Time::now();
     ROS_INFO("[AUBO HW] ENTERING MAIN CONTROL LOOP");
     while(ros::ok()){
@@ -574,13 +697,24 @@ int main(int argc, char** argv){
         now = ros::Time::now();
         dt = now-last;
 
-        hw.read(dt);
-        cm.update(now,dt);
+        ret=hw.read(dt);
+        if(ret<0)
+        {
+            read_missed++;
+            if(read_missed>5)
+            {
+                ROS_ERROR_THROTTLE(1, "[AUBO HW] %d consecutive reads missed", read_missed);
+            }
+        }else{
+            read_missed=0;
+        }
+        cm.update(now,dt, hw.is_estopped());
         ret = hw.write(dt);
         // catch the case where servoj commands were interrupted and the robot falls out of servoj mode
         if (ret==-13)
         {
-            hw.activate();
+            ROS_FATAL("------------------------------- ret 13 reactivate needed. -----------------------");
+            // hw.activate();
         }
 
         // maintain robot heartbeat
