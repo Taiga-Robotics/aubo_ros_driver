@@ -65,8 +65,6 @@ class AuboController : public IROSHardware
         std::vector<double> target_TCP_pose_{ std::vector<double>(6, 0.) };
         std::vector<double> target_TCP_speed_{ std::vector<double>(6, 0.) };
 
-
-
         // ROS Publishers, Services and subscribers
         std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray> > cmd_out_pub_;
         std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Bool> > estop_pub_;
@@ -78,12 +76,18 @@ class AuboController : public IROSHardware
         ros::ServiceServer go_op_svc_;
         ros::ServiceServer set_load_svc_;
         ros::ServiceServer set_IO_output_svc_;
+        ros::ServiceServer set_tool_IO_output_svc_;
+        ros::ServiceServer set_tool_IO_mode_svc_;
         ros::ServiceServer clear_protective_stop_svc_;
         ros::ServiceServer servomode_on_svc_;
         ros::ServiceServer servomode_off_svc_;
         ros::ServiceServer get_servomode_svc;
 
-
+        /*
+            The constructor shall bring up enough of the hardware class to allow for a controller MANAGER to start.
+            Controllers may not need to be started yet.
+            this is to support startup with robots that can take a long (>5s) time to become operational.
+         */
         AuboController(ros::NodeHandle &node_handle): IROSHardware(node_handle) // example of how to call a specific parent constructor
         {
 
@@ -418,6 +422,8 @@ class AuboController : public IROSHardware
             go_op_svc_ = node_handle.advertiseService("go_operational", &AuboController::go_op_svc_cb, this);
             set_load_svc_ = node_handle.advertiseService("set_load", &AuboController::set_load_cb, this);
             set_IO_output_svc_ = node_handle.advertiseService("set_io_ouput", &AuboController::set_io_output_cb, this);
+            set_tool_IO_output_svc_ = node_handle.advertiseService("set_tool_io_ouput", &AuboController::set_tool_io_output_cb, this);
+            set_tool_IO_mode_svc_ = node_handle.advertiseService("set_tool_io_mode", &AuboController::set_tool_io_mode_cb, this);
             clear_protective_stop_svc_ = node_handle.advertiseService("clear_protective_stop", &AuboController::clear_protective_stop_cb, this);
             servomode_on_svc_ = node_handle.advertiseService("servomode_on", &AuboController::servomode_on_cb, this);
             servomode_off_svc_ = node_handle.advertiseService("servomode_off", &AuboController::servomode_off_cb, this);
@@ -549,7 +555,8 @@ class AuboController : public IROSHardware
             
             return(res.success);
         }
-        
+
+
         bool set_io_output_cb(aubo_msgs::SetIORequest &req, aubo_msgs::SetIOResponse &res)
         {
             if(req.fun==req.FUN_SET_DIGITAL_OUT)
@@ -558,7 +565,27 @@ class AuboController : public IROSHardware
             }
             return(true);
         }
-        
+
+
+        bool set_tool_io_output_cb(aubo_msgs::SetIORequest &req, aubo_msgs::SetIOResponse &res)
+        {
+            if(req.fun==req.FUN_SET_DIGITAL_OUT)
+            {
+                robot_interface_->getIoControl()->setToolDigitalOutput(req.pin, req.state);
+            }
+            return(true);
+        }
+
+
+        bool set_tool_io_mode_cb(aubo_msgs::SetIORequest &req, aubo_msgs::SetIOResponse &res)
+        {
+            if(req.fun==req.FUN_CONFIGURE_PIN)
+            {
+                robot_interface_->getIoControl()->setToolIoInput(req.pin, req.state==req.STATE_INPUT);
+            }
+            return(true);
+        }
+
 
         bool clear_protective_stop_cb(std_srvs::TriggerRequest &req, std_srvs::TriggerResponse &res)
         {
@@ -573,6 +600,7 @@ class AuboController : public IROSHardware
             return(res.success);
         }
 
+
         bool servomode_on_cb(std_srvs::TriggerRequest &req, std_srvs::TriggerResponse &res)
         {
             res.success=false;
@@ -585,6 +613,7 @@ class AuboController : public IROSHardware
             res.success=true;
             return(true);
         }
+
 
         bool servomode_off_cb(std_srvs::TriggerRequest &req, std_srvs::TriggerResponse &res)
         {
@@ -599,6 +628,7 @@ class AuboController : public IROSHardware
             return(true);
 
         }
+
 
         bool get_servomode_cb(std_srvs::TriggerRequest &req, std_srvs::TriggerResponse &res)
         {
@@ -615,6 +645,7 @@ class AuboController : public IROSHardware
             return(true);
 
         }
+
 
         bool is_estopped()
         {
@@ -636,7 +667,6 @@ int main(int argc, char** argv){
 
     ros::init(argc, argv, "aubo_hw_interface");
 
-
     ROS_DEBUG("[AUBO HW] aubo interface node enter");
     
     ros::NodeHandle nh; // when launching from a launch file
@@ -650,6 +680,10 @@ int main(int argc, char** argv){
         return -5;
 
     std::cout<<"[AUBO HW] created STATE: " << hw.getState() << std::endl;
+
+    //make a controller manager HERE NOW BEFORE CONFIGURE BRINGS UP THE COMMUNICATIONS INTERFACE.
+    controller_manager::ControllerManager cm(&hw, nh);
+
     //init
     if(hw.configure()!=0){
         //TODO: handle if returned false
@@ -662,9 +696,8 @@ int main(int argc, char** argv){
     }
     std::cout<<"[AUBO HW] configured STATE: " << hw.getState() << std::endl;
     
+    // CONTROLLER MANAGER WAS HERE
 
-    //make a controller manager (ONLY CREATE THIS WHEN THE HW IS READY TO GO)
-    controller_manager::ControllerManager cm(&hw, nh);
     //start non "RT" thread (cause this one can get locked)
     ros::AsyncSpinner spinner(1);
     spinner.start();
