@@ -40,6 +40,7 @@ class AuboController : public IROSHardware
         double timestamp_=0.0, last_rtde_timestamp_=-1.0;
         std::vector<double> actual_q_{ std::vector<double>(6, 0.) };
         std::vector<double> actual_qd_{ std::vector<double>(6, 0.) };
+        std::vector<double> actual_qdd_{ std::vector<double>(6, 0.) };
         std::vector<double> actual_TCP_pose_{ std::vector<double>(6, 0.) };
         RobotModeType robot_mode_ = RobotModeType::NoController;
         SafetyModeType safety_mode_ = SafetyModeType::Normal;
@@ -59,6 +60,7 @@ class AuboController : public IROSHardware
         std::vector<double> actual_current_{ std::vector<double>(6, 0.1) };
         std::vector<double> target_q_{ std::vector<double>(6, 0) };
         std::vector<double> target_qd_{ std::vector<double>(6, 0) };
+        // std::vector<double> last_qd_{ std::vector<double>(6, 0) };
         std::vector<double> actual_current_e{ std::vector<double>(6, 0) };
         std::vector<double> actual_TCP_speed_{ std::vector<double>(6, 0.) };
         std::vector<double> actual_TCP_force_{ std::vector<double>(6, 0.) };
@@ -126,6 +128,7 @@ class AuboController : public IROSHardware
         int read(ros::Duration &dt){
             int ret=-1;
             {
+                // double deltat = dt.toSec();
                 std::unique_lock<std::mutex> lck(rtde_mtx_);
                 // if (rtde_data_valid_ && timestamp_ > last_rtde_timestamp_)
                 if (rtde_data_valid_)
@@ -135,11 +138,13 @@ class AuboController : public IROSHardware
                     {
                         joint_pos_[jnt] = actual_q_[jnt];
                         joint_vel_[jnt] = actual_qd_[jnt];
-                        joint_eff_[jnt] = actual_joint_torque_[jnt];
+                        joint_eff_[jnt] = actual_qdd_[jnt]; //actual_joint_torque_[jnt];
+                        // last_qd_[jnt] = actual_qd_[jnt];
                     }
                     rtde_data_valid_ = false;
                     data_valid_ = true; //latch for now
                     ret=0;
+
                 }
             }
 
@@ -159,7 +164,7 @@ class AuboController : public IROSHardware
             if(robot_cmd_mode_==MD_POSITION){
                 ROS_DEBUG_THROTTLE(1, "[HW] [write] MD_POSITION");
                 double target_time = 2.0/control_hz_;
-                ret=robot_interface_->getMotionControl()->servoJoint(joint_pos_cmd_, 31.4, 3.14, target_time, 1.0, 1.0);
+                ret=robot_interface_->getMotionControl()->servoJoint(joint_pos_cmd_, 31.4, 3.14, target_time, 0.050123, 200.00);
 
                 //publish the cmd that we received at full loop rate for now.
                 if (cmd_out_pub_->trylock()){
@@ -206,7 +211,7 @@ class AuboController : public IROSHardware
             // subscribe to an RTDE stream for robot position data
             int topic1 = rtde_client_->setTopic(false,
                 { "timestamp", "R1_actual_q", "R1_actual_qd", "R1_robot_mode", "R1_safety_mode",
-                "runtime_state", "line_number", "R1_actual_TCP_pose" },
+                "runtime_state", "line_number", "R1_actual_TCP_pose", "R1_actual_qdd"},
                 control_hz_, 0);
 
             rtde_client_->subscribe(topic1, [this](InputParser &parser) 
@@ -221,6 +226,7 @@ class AuboController : public IROSHardware
                     runtime_state_ = parser.popRuntimeState();
                     line_ = parser.popInt32();
                     actual_TCP_pose_ = parser.popVectorDouble();
+                    actual_qdd_ = parser.popVectorDouble();
                     rtde_data_valid_=true;
                     // process estop bool immediately
                     if(((safety_mode_ == SafetyModeType::Normal) || (safety_mode_ == SafetyModeType::ReducedMode)) && (robot_mode_ == RobotModeType::Running))  
