@@ -6,7 +6,9 @@
 #include <std_msgs/Int64.h>
 #include <std_msgs/UInt64.h>
 #include <std_msgs/Bool.h>
+#include <std_msgs/Float64.h>
 #include <std_srvs/Trigger.h>
+#include <sensor_msgs/JointState.h>
 #include <aubo_msgs/SetPayload.h>
 #include <aubo_msgs/SetIO.h>
 #include <ros/console.h>
@@ -21,6 +23,8 @@ using namespace arcs::common_interface;
 // my aubo class:
 class AuboController : public IROSHardware
 {
+    double servoj_arrival_samples_=2.0;
+    double velmode_horizon_samples_=2.0;
     //TODO: sort out public and private later.
     public:
         JointCmdMode last_robot_cmd_mode_ = MD_NONE, robot_cmd_mode_ = MD_NONE; // also used to determine whether to be in servoj mode or not
@@ -45,9 +49,13 @@ class AuboController : public IROSHardware
         RobotModeType robot_mode_ = RobotModeType::NoController;
         SafetyModeType safety_mode_ = SafetyModeType::Normal;
         RuntimeState runtime_state_ = RuntimeState::Stopped;
+        double voltage_, current_;
+        std::vector<double> target_q_{ std::vector<double>(6, 0) };
+        std::vector<double> target_qd_{ std::vector<double>(6, 0) };
+        std::vector<double> target_qdd_{ std::vector<double>(6, 0) };
         int line_{ -1 };
         bool rtde_data_valid_=false;
-        RobotMsg robotmsg_;
+
 
         // RTDE IO data
         std::mutex rtde_input_mtx_;
@@ -58,9 +66,6 @@ class AuboController : public IROSHardware
         //other
         std::vector<double> actual_joint_torque_{ std::vector<double>(6, 0.) };
         std::vector<double> actual_current_{ std::vector<double>(6, 0.1) };
-        std::vector<double> target_q_{ std::vector<double>(6, 0) };
-        std::vector<double> target_qd_{ std::vector<double>(6, 0) };
-        // std::vector<double> last_qd_{ std::vector<double>(6, 0) };
         std::vector<double> actual_current_e{ std::vector<double>(6, 0) };
         std::vector<double> actual_TCP_speed_{ std::vector<double>(6, 0.) };
         std::vector<double> actual_TCP_force_{ std::vector<double>(6, 0.) };
@@ -69,6 +74,8 @@ class AuboController : public IROSHardware
 
         // ROS Publishers, Services and subscribers
         std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray> > cmd_out_pub_;
+        std::shared_ptr<realtime_tools::RealtimePublisher<sensor_msgs::JointState> > target_out_pub_;
+        std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Float64> > power_pub_;
         std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Bool> > estop_pub_;
         std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Int64> > robot_mode_pub_;
         std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Int64> > safety_mode_pub_;
@@ -98,14 +105,36 @@ class AuboController : public IROSHardware
             if(hw_state_== ST_ERROR || hw_state_ == ST_FINAL)
                 return;
 
-            control_hz_ = 100;
-            // control_hz_ = 500;
+            double control_hz=100;
+            if(!node_handle.getParam("control_hz", control_hz)) 
+            {
+                ROS_WARN("Control hz not specified in driver namespace");
+            }
+            control_hz_=control_hz;
+
+            double sj_arrival_samples=2.0;
+            if(!node_handle.getParam("servoj_arrival_samples", sj_arrival_samples)) 
+            {
+                ROS_WARN("servoj arrival samples not specified in driver namespace");
+            }
+
+            servoj_arrival_samples_ = sj_arrival_samples;
+
+            double velmode_horizon_samples=2.0;
+            if(!node_handle.getParam("velmode_horizon_samples", velmode_horizon_samples)) 
+            {
+                ROS_WARN("velmode_horizon_samples not specified in driver namespace");
+            }
+
+            velmode_horizon_samples_ = velmode_horizon_samples;
+
 
             //make w/e you need to here.
             std::cout<<"aubo Controller Constructor\n";
             std::cout<<"----------------------------\n";
             std::cout<<"num joints: " << num_joints_<<std::endl;
             std::cout<<"frequency: " << control_hz_<<std::endl;
+            std::cout<<"arrival: " << servoj_arrival_samples_<<std::endl;
             std::cout<<"----------------------------\n";
 
             // realtime publisher
@@ -146,6 +175,16 @@ class AuboController : public IROSHardware
                     ret=0;
 
                 }
+                if (target_out_pub_->trylock())
+                {
+                    for(int jid=0; jid<num_joints_; jid++)
+                    {
+                        target_out_pub_->msg_.position[jid] = target_q_[jid];
+                        target_out_pub_->msg_.velocity[jid] = target_qd_[jid];
+                        target_out_pub_->msg_.effort[jid] = target_qdd_[jid];
+                    }
+                }
+                target_out_pub_->unlockAndPublish();
             }
 
             return ret;
@@ -163,7 +202,46 @@ class AuboController : public IROSHardware
 
             if(robot_cmd_mode_==MD_POSITION){
                 ROS_DEBUG_THROTTLE(1, "[HW] [write] MD_POSITION");
-                double target_time = 2.0/control_hz_;
+                double target_time = servoj_arrival_samples_/control_hz_;
+                ret=robot_interface_->getMotionControl()->servoJoint(joint_pos_cmd_, 31.3999, 3.13999, target_time, 0.050123, 200.00);
+
+                //publish the cmd that we received at full loop rate for now.
+                if (cmd_out_pub_->trylock()){
+                    for(int jid=0; jid<num_joints_; jid++) cmd_out_pub_->msg_.data[jid]=joint_pos_cmd_[jid];
+                }
+                cmd_out_pub_->unlockAndPublish();
+
+            }
+            else if(robot_cmd_mode_==MD_VELOCITY){
+                // ROS_DEBUG_THROTTLE(1, "[HW] [write] MD_POSITION");
+                
+                double target_time = servoj_arrival_samples_/control_hz_;
+                double horizon_time = velmode_horizon_samples_/control_hz_;
+                for(int jid=0; jid<num_joints_; jid++)
+                {
+                    joint_pos_cmd_[jid] = joint_pos_[jid] + joint_vel_cmd_[jid] * horizon_time;
+                }
+                
+                ret=robot_interface_->getMotionControl()->servoJoint(joint_pos_cmd_, 31.4, 3.14, target_time, 0.050123, 200.00);
+
+                //publish the cmd that we received at full loop rate for now.
+                if (cmd_out_pub_->trylock()){
+                    for(int jid=0; jid<num_joints_; jid++) cmd_out_pub_->msg_.data[jid]=joint_pos_cmd_[jid];
+                }
+                cmd_out_pub_->unlockAndPublish();
+
+            }
+            else if(robot_cmd_mode_==MD_POSVEL){
+                // ROS_DEBUG_THROTTLE(1, "[HW] [write] MD_POSITION");
+                
+                double target_time = servoj_arrival_samples_/control_hz_;
+                double horizon_time = velmode_horizon_samples_/control_hz_;
+                
+                for(int jid=0; jid<num_joints_; jid++)
+                {
+                    joint_pos_cmd_[jid] += joint_vel_cmd_[jid] * horizon_time;
+                }
+                
                 ret=robot_interface_->getMotionControl()->servoJoint(joint_pos_cmd_, 31.4, 3.14, target_time, 0.050123, 200.00);
 
                 //publish the cmd that we received at full loop rate for now.
@@ -180,7 +258,7 @@ class AuboController : public IROSHardware
             }
             else
             {
-                ROS_DEBUG_THROTTLE(10, "[HW] [write] Unsupported Mode");
+                ROS_WARN_THROTTLE(10, "[HW] [write] Unsupported Mode %d.", robot_cmd_mode_);
                 ret=-9;
             }
 
@@ -210,15 +288,15 @@ class AuboController : public IROSHardware
             ROS_INFO("[AUBO HW] Starting RTDE Stream...");
             // subscribe to an RTDE stream for robot position data
             int topic1 = rtde_client_->setTopic(false,
-                { "timestamp", "R1_actual_q", "R1_actual_qd", "R1_robot_mode", "R1_safety_mode",
-                "runtime_state", "line_number", "R1_actual_TCP_pose", "R1_actual_qdd"},
+                {"R1_actual_q", "R1_actual_qd", "R1_robot_mode", "R1_safety_mode",
+                "runtime_state", "line_number", "R1_actual_TCP_pose", "R1_actual_qdd", "R1_actual_robot_current",
+                 "R1_target_q", "R1_target_qd", "R1_target_qdd"},
                 control_hz_, 0);
 
             rtde_client_->subscribe(topic1, [this](InputParser &parser) 
                 {
                     /* -- THIS ANONYMOUS FUNCTION IS THE CALLBACK THAT HANDLES UNLOADING THE RTDE MESSAGE -- */
                     std::unique_lock<std::mutex> lck(rtde_mtx_);
-                    timestamp_ = parser.popDouble();    
                     actual_q_ = parser.popVectorDouble();
                     actual_qd_ = parser.popVectorDouble();
                     robot_mode_ = parser.popRobotModeType();
@@ -227,6 +305,10 @@ class AuboController : public IROSHardware
                     line_ = parser.popInt32();
                     actual_TCP_pose_ = parser.popVectorDouble();
                     actual_qdd_ = parser.popVectorDouble();
+                    current_ = parser.popDouble();
+                    target_q_ = parser.popVectorDouble();
+                    target_qd_ = parser.popVectorDouble();
+                    target_qdd_ = parser.popVectorDouble();
                     rtde_data_valid_=true;
                     // process estop bool immediately
                     if(((safety_mode_ == SafetyModeType::Normal) || (safety_mode_ == SafetyModeType::ReducedMode)) && (robot_mode_ == RobotModeType::Running))  
@@ -293,7 +375,7 @@ class AuboController : public IROSHardware
             //enter servoj mode
             if (last_robot_cmd_mode_!=robot_cmd_mode_) 
             {
-                if (robot_cmd_mode_==MD_POSITION)
+                if (robot_cmd_mode_==MD_POSITION || robot_cmd_mode_==MD_VELOCITY || robot_cmd_mode_==MD_POSVEL)
                 {
                     activate();
                 }else
@@ -312,7 +394,7 @@ class AuboController : public IROSHardware
         */
         int activate(){
             // begin servoj mode
-            if(robot_cmd_mode_ == MD_POSITION && estopped_ == false)
+            if((robot_cmd_mode_ == MD_POSITION || robot_cmd_mode_ == MD_VELOCITY || robot_cmd_mode_==MD_POSVEL) && estopped_ == false)
             {
                 ROS_INFO("[AUBO HW] ACTIVATING... for the %ld time.", ++activates_);
                 int ret = robot_interface_->getMotionControl()->setServoMode(true);
@@ -406,6 +488,13 @@ class AuboController : public IROSHardware
         void init_ancillary_pubs(ros::NodeHandle &node_handle)
         {
 
+            target_out_pub_.reset(new realtime_tools::RealtimePublisher<sensor_msgs::JointState>(node_handle, "target_state", 1));
+            target_out_pub_->msg_.name = joint_name_;
+            target_out_pub_->msg_.position.resize(6);
+            target_out_pub_->msg_.velocity.resize(6);
+            target_out_pub_->msg_.effort.resize(6);
+            // target_out_pub_->msg_.
+            
             robot_mode_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::Int64>(node_handle, "robot_mode", 1));
             robot_mode_pub_->msg_.data=-1000;
 
@@ -423,6 +512,9 @@ class AuboController : public IROSHardware
 
             TOOL_IO_inputs_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::UInt64>(node_handle, "tool_io_inputs", 1));
             TOOL_IO_inputs_pub_->msg_.data=0;
+
+            power_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::Float64>(node_handle, "power", 1));
+            power_pub_->msg_.data=0.0;
 
             // init srvs
             go_op_svc_ = node_handle.advertiseService("go_operational", &AuboController::go_op_svc_cb, this);
@@ -459,7 +551,12 @@ class AuboController : public IROSHardware
                     runtime_state_pub_->msg_.data = robot_cmd_mode_;//(int64_t)runtime_state_;
                 }
                 runtime_state_pub_->unlockAndPublish();
-
+                
+                if (power_pub_->trylock())
+                {
+                    power_pub_->msg_.data = 48.0*current_;
+                }
+                power_pub_->unlockAndPublish();
             }
             {
                 //scope for rtde input republisher
@@ -730,6 +827,9 @@ int main(int argc, char** argv){
     int ret, read_missed=0;
     last_low_freq_pub_time = ros::Time::now();
     ROS_INFO("[AUBO HW] ENTERING MAIN CONTROL LOOP");
+    unsigned long loops=0;
+    unsigned long reactivates=0;
+    ros::Time start = ros::Time::now();
     while(ros::ok()){
         
         last = now;
@@ -747,12 +847,12 @@ int main(int argc, char** argv){
         }else{
             read_missed=0;
         }
-        cm.update(now,dt, hw.is_estopped());
+        cm.update(now, dt, hw.is_estopped());
         ret = hw.write(dt);
         // catch the case where servoj commands were interrupted and the robot falls out of servoj mode
         if (ret==-13)
         {
-            ROS_FATAL("------------------------------- ret 13 reactivate needed. -----------------------");
+            ROS_WARN_THROTTLE(10.0, "[AUBO HW] write returns 13, reactivate needed. This has happened %ld times.", reactivates);
             // hw.activate();
         }
 
@@ -767,11 +867,15 @@ int main(int argc, char** argv){
             last_low_freq_pub_time += ros::Duration((1.0/20.0));
         }
 
+        loops++;
+        if((dt.toSec()<(0.5/hw.getControlHz())) || dt.toSec()> 1.5/hw.getControlHz()) ROS_WARN("[AUBO HW] dt out of bounds: %f", dt.toSec());
+
         _rate.sleep();
 
     }//-----------------------------------------------------------
-
-
+    ros::Time end=ros::Time::now();
+    double rate = loops/(end-start).toSec();
+    ROS_INFO("[AUBO HW] Loop rate was %5.3f Hz", rate);
     //shutdown and clean up
 
     //can roll this into shutdown() if you want
