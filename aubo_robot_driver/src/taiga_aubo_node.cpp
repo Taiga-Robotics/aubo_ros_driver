@@ -855,6 +855,10 @@ int main(int argc, char** argv){
             ROS_WARN_THROTTLE(10.0, "[AUBO HW] write returns 13, reactivate needed. This has happened %ld times.", reactivates);
             // hw.activate();
         }
+        else if (ret==2)
+        {
+            ROS_WARN_THROTTLE(10.0, "[AUBO HW] write returns 2, BUFFER FULL.");
+        }
 
         // maintain robot heartbeat
         hb_msg.data++;
