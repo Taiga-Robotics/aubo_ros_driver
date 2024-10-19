@@ -591,7 +591,7 @@ class AuboController : public IROSHardware
             auto robot_mode = robot_interface_->getRobotState()->getRobotModeType();
             std::string msg;
             if (robot_mode == RobotModeType::Running) {
-                msg = "The robot arm has released the brake and is in running mode";
+                msg = "[AUBO HW] The robot arm has already released the brake and is already in running mode, no action taken.";
                 ROS_INFO("%s",msg.c_str());
                 res.message = msg;
                 res.success = true;
