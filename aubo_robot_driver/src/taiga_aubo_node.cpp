@@ -200,12 +200,11 @@ class AuboController : public IROSHardware
         */
         int write(ros::Duration &dt){
             int ret=0;
-            enforceLimit(dt); // will work with pos/vel/effort, depending on configuration
-
             if(estopped_) return(0);
 
             if(robot_cmd_mode_==MD_POSITION){
                 // ROS_DEBUG_THROTTLE(1, "[HW] [write] MD_POSITION");
+                enforceLimit(dt); // will work with pos/vel/effort, depending on configuration
                 double target_time = servoj_arrival_samples_/control_hz_;
                 ret=robot_interface_->getMotionControl()->servoJoint(joint_pos_cmd_, 31.3999, 3.13999, target_time, 0.050123, 200.00);
                 num_writes_++;
@@ -219,7 +218,7 @@ class AuboController : public IROSHardware
             }
             else if(robot_cmd_mode_==MD_VELOCITY){
                 // ROS_DEBUG_THROTTLE(1, "[HW] [write] MD_VELOCITY");
-                
+                enforceLimit(dt); // will work with pos/vel/effort, depending on configuration
                 double target_time = servoj_arrival_samples_/control_hz_;
                 double horizon_time = velmode_horizon_samples_/control_hz_;
                 for(int jid=0; jid<num_joints_; jid++)
@@ -247,7 +246,8 @@ class AuboController : public IROSHardware
                 {
                     joint_pos_cmd_[jid] += joint_vel_cmd_[jid] * horizon_time;
                 }
-                
+                ros::Duration limit_dt = dt + ros::Duration(horizon_time);
+                enforceLimit(limit_dt); // will work with pos/vel/effort, depending on configuration
                 ret=robot_interface_->getMotionControl()->servoJoint(joint_pos_cmd_, 31.4, 3.14, target_time, 0.050123, 200.00);
 
                 //publish the cmd that we received at full loop rate for now.
