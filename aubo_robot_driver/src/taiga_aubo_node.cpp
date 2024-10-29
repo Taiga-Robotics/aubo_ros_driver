@@ -536,8 +536,8 @@ class AuboController : public IROSHardware
             go_op_svc_ = node_handle.advertiseService("go_operational", &AuboController::go_op_svc_cb, this);
             handguide_svc_ = node_handle.advertiseService("handguide", &AuboController::handguide_svc_cb, this);
             set_load_svc_ = node_handle.advertiseService("set_load", &AuboController::set_load_cb, this);
-            set_IO_output_svc_ = node_handle.advertiseService("set_io_ouput", &AuboController::set_io_output_cb, this);
-            set_tool_IO_output_svc_ = node_handle.advertiseService("set_tool_io_ouput", &AuboController::set_tool_io_output_cb, this);
+            set_IO_output_svc_ = node_handle.advertiseService("set_io_output", &AuboController::set_io_output_cb, this);
+            set_tool_IO_output_svc_ = node_handle.advertiseService("set_tool_io_output", &AuboController::set_tool_io_output_cb, this);
             set_tool_IO_mode_svc_ = node_handle.advertiseService("set_tool_io_mode", &AuboController::set_tool_io_mode_cb, this);
             clear_protective_stop_svc_ = node_handle.advertiseService("clear_protective_stop", &AuboController::clear_protective_stop_cb, this);
             servomode_on_svc_ = node_handle.advertiseService("servomode_on", &AuboController::servomode_on_cb, this);
