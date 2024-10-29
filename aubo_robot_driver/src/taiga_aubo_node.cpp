@@ -272,12 +272,6 @@ class AuboController : public IROSHardware
         };
 
 
-        void enforceLimit(ros::Duration &dt){
-            pos_limit_interface_.enforceLimits(dt);
-            // vel_limit_interface_.enforceLimits(dt);
-            // eff_limit_interface_.enforceLimits(dt);
-        }
-
         /*
             CONFIGURE()
         */
