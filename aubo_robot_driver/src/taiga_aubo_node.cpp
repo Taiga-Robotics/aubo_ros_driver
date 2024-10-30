@@ -50,6 +50,7 @@ class AuboController : public IROSHardware
         std::vector<double> actual_qdd_{ std::vector<double>(6, 0.) };
         std::vector<double> actual_TCP_pose_{ std::vector<double>(6, 0.) };
         RobotModeType robot_mode_ = RobotModeType::NoController;
+        RobotControlModeType robot_control_mode_ = RobotControlModeType::Unknown;
         SafetyModeType safety_mode_ = SafetyModeType::Normal;
         RuntimeState runtime_state_ = RuntimeState::Stopped;
         double voltage_, current_;
@@ -80,6 +81,7 @@ class AuboController : public IROSHardware
         std::shared_ptr<realtime_tools::RealtimePublisher<sensor_msgs::JointState> > target_out_pub_;
         std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Float64> > power_pub_;
         std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Bool> > estop_pub_;
+        std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Int64> > robot_control_mode_pub_;
         std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Int64> > robot_mode_pub_;
         std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Int64> > safety_mode_pub_;
         std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Int64> > runtime_state_pub_;
@@ -493,6 +495,23 @@ class AuboController : public IROSHardware
             return(true);
         }
 
+        bool waitForRobotControlMode(RobotControlModeType target_control_mode, double max_time=1.5)
+        {
+            RobotControlModeType current_control_mode;
+            double wait_time=0.0;
+
+            do{
+                current_control_mode = robot_interface_->getRobotManage()->getRobotControlMode();
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                wait_time+=0.1;
+                if(wait_time>max_time)
+                {
+                    ROS_WARN("[AUBO HW] Robot control mode did not achieve target mode before wait expired.");   //TODO: details
+                    return(false);
+                }
+            } while (current_control_mode != target_control_mode);
+            return(true);
+        }
 
         // broken out into a function for easy transplanting back into aubo_ros_driver
         void init_ancillary_pubs(ros::NodeHandle &node_handle)
@@ -507,6 +526,9 @@ class AuboController : public IROSHardware
             
             robot_mode_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::Int64>(node_handle, "robot_mode", 1));
             robot_mode_pub_->msg_.data=-1000;
+
+            robot_control_mode_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::Int64>(node_handle, "robot_control_mode", 1));
+            robot_control_mode_pub_->msg_.data=-1000;
 
             safety_mode_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::Int64>(node_handle, "safety_mode", 1));
             safety_mode_pub_->msg_.data=-1000;
@@ -593,6 +615,12 @@ class AuboController : public IROSHardware
             }
             estop_pub_->unlockAndPublish();
 
+            if (robot_control_mode_pub_->trylock())
+            {
+                robot_control_mode_pub_->msg_.data = (int64_t)robot_interface_->getRobotManage()->getRobotControlMode();
+            }
+            robot_control_mode_pub_->unlockAndPublish();
+
         }
 
 
@@ -607,9 +635,29 @@ class AuboController : public IROSHardware
             OperationalModeType robot_operational_mode = robot_interface_->getRobotManage()->getOperationalMode(); // disabled / auto / manual
             ROS_WARN("[AUBO HW] control mode: %d, operational mode %d.", (int) robot_control_mode, (int) robot_operational_mode);
 
+            bool in_zerog = (robot_control_mode == RobotControlModeType::Freedrive) || (robot_control_mode == RobotControlModeType::Force);
             std::string msg;
+            if (in_zerog)
+            {
+                msg += "::[AUBO HW] robot is in zerog mode [" + std::to_string((int)robot_control_mode) + "]. Disabling first";
+                ROS_INFO("%s",msg.c_str());
+                int retval = robot_interface_->getRobotManage()->freedrive(false);
+                if (retval==0)
+                {
+                    hangduide_active_ = false;
+                    msg += "::[AUBO HW] Successfully exited zerog";
+                    ROS_INFO("%s",msg.c_str());
+                }
+                else{
+                    msg += "::[AUBO HW] could not take robot out of zerog/freedrive";
+                    ROS_ERROR("%s",msg.c_str());
+                    res.message = msg;
+                    return(res.success);
+                }
+            }
+            
             if (robot_mode == RobotModeType::Running) {
-                msg = "[AUBO HW] The robot arm has already released the brake and is already in running mode, no action taken.";
+                msg += "::[AUBO HW] The robot arm has already released the brake and is already in running mode, no action taken.";
                 ROS_INFO("%s",msg.c_str());
                 res.message = msg;
                 res.success = true;
@@ -620,7 +668,7 @@ class AuboController : public IROSHardware
                 auto pret = robot_interface_->getRobotManage()->poweron();
                 if (pret == AUBO_BAD_STATE)
                 {
-                    msg = "[AUBO HW] failed to poweron";
+                    msg += "::[AUBO HW] failed to poweron";
                     ROS_ERROR("%s",msg.c_str());
                     res.message = msg;
                     return(res.success);
@@ -659,18 +707,36 @@ class AuboController : public IROSHardware
         {
             res.success = false;
             res.message = "";
+            std::string msg;
+            RobotControlModeType target_mode = RobotControlModeType::Unknown;
+            if (req.enabled)
+            {
+                target_mode = RobotControlModeType::Freedrive;
+            }
             
             int retval = robot_interface_->getRobotManage()->freedrive(req.enabled);
-            if (retval==0)
+            if (retval==0) 
             {
-                res.success=true;
-                hangduide_active_ = req.enabled;
+                msg += "::[AUBO HW] call to freedrive() method succeeded";
+                //TODO: figure out why this doesn't work
+                // if (0!=waitForRobotControlMode(target_mode))
+                // {
+                //     msg += "::[AUBO HW] Could not read back correct target control mode type sufficiently quickly";
+                //     res.success = false;
+                // }
+                // else{
+                    // msg += "::[AUBO HW] Successfully read back correct target control mode type sufficiently quickly";
+                    res.success=true;
+                    hangduide_active_ = req.enabled;
+                // }
             }else
             {
-                res.message = "handguide mode set to " + std::to_string(req.enabled) + " failed with return code " + std::to_string(retval);
+                msg += "::[AUBO HW] handguide mode set to " + std::to_string(req.enabled) + " failed with return code " + std::to_string(retval);
+                res.success = false;
             }
 
-            return(true);
+            res.message = msg;
+            return(res.success);
 
         }
 
