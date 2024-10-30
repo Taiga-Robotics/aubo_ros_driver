@@ -22,7 +22,6 @@ add_message_files(
 ## Generate services in the 'srv' folder
 add_service_files(
    FILES
-   SetBool.srv
    SetIO.srv
    SetPayload.srv
    SetSpeedSliderFraction.srv

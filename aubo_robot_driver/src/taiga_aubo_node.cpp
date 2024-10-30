@@ -11,7 +11,7 @@
 #include <sensor_msgs/JointState.h>
 #include <aubo_msgs/SetPayload.h>
 #include <aubo_msgs/SetIO.h>
-#include <aubo_msgs/SetBool.h>
+#include <std_srvs/SetBool.h>
 #include <ros/console.h>
 #include <ros_control_hw_interface/IROSHardware.h>
 
@@ -703,18 +703,18 @@ class AuboController : public IROSHardware
 
 
         /*svc callback to handle entering and exiting handguide aka freedrive aka zero-g mode*/
-        bool handguide_svc_cb(aubo_msgs::SetBoolRequest &req, aubo_msgs::SetBoolResponse &res)
+        bool handguide_svc_cb(std_srvs::SetBoolRequest &req, std_srvs::SetBoolResponse &res)
         {
             res.success = false;
             res.message = "";
             std::string msg;
             RobotControlModeType target_mode = RobotControlModeType::Unknown;
-            if (req.enabled)
+            if (req.data)
             {
                 target_mode = RobotControlModeType::Freedrive;
             }
             
-            int retval = robot_interface_->getRobotManage()->freedrive(req.enabled);
+            int retval = robot_interface_->getRobotManage()->freedrive(req.data);
             if (retval==0) 
             {
                 msg += "::[AUBO HW] call to freedrive() method succeeded";
@@ -727,11 +727,11 @@ class AuboController : public IROSHardware
                 // else{
                     // msg += "::[AUBO HW] Successfully read back correct target control mode type sufficiently quickly";
                     res.success=true;
-                    hangduide_active_ = req.enabled;
+                    hangduide_active_ = req.data;
                 // }
             }else
             {
-                msg += "::[AUBO HW] handguide mode set to " + std::to_string(req.enabled) + " failed with return code " + std::to_string(retval);
+                msg += "::[AUBO HW] handguide mode set to " + std::to_string(req.data) + " failed with return code " + std::to_string(retval);
                 res.success = false;
             }
 
