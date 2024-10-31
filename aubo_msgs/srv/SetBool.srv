@@ -1,5 +1,0 @@
-# General service type to move around a single bool
-bool enabled
----
-bool success
-string message
