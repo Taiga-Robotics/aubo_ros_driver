@@ -373,7 +373,12 @@ class AuboController : public IROSHardware
             //call parent to do basic stuff
             IROSHardware::prepareSwitch(start_list, stop_list);
 
-            return true;
+            std::string limit_msg = "";
+            bool result = checkLimit(limit_msg);
+            if(!result) 
+                ROS_ERROR("[HW] Failed to switch controllers due to limits violation, the following joints are out of bounds:\n %s", limit_msg.c_str());
+
+            return result;
         }
 
 
