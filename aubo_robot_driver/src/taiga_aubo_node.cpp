@@ -385,6 +385,7 @@ class AuboController : public IROSHardware
                 }else if (start_list.size()==0)
                 {
                     // I guess this is fine.   
+                    result=true;
                 }
                 else
                 {
