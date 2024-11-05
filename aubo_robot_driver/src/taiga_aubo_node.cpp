@@ -377,12 +377,18 @@ class AuboController : public IROSHardware
             bool result = checkLimit(limit_msg);
             if(!result) 
             {
-                ROS_ERROR("[HW] Failed to switch controllers due to limits violation, the following joints are out of bounds:\n %s", limit_msg.c_str());
-
                 //allow the JSC to start even if we're out of bounds.
                 if( (start_list.size() == 1) && (start_list.front().type == "joint_state_controller/JointStateController") )
                 {
+                    ROS_WARN("[HW] Allowing switch controllers to load the joint state controller ONLY. Due to limits violation no other controllers will be permitted, the following joints are out of bounds:\n %s", limit_msg.c_str());
                     result=true;
+                }else if (start_list.size()==0)
+                {
+                    // I guess this is fine.   
+                }
+                else
+                {
+                    ROS_ERROR("[HW] Failed to switch controllers due to limits violation, the following joints are out of bounds:\n %s", limit_msg.c_str());
                 }
             }
 
