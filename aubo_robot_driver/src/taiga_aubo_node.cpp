@@ -370,9 +370,6 @@ class AuboController : public IROSHardware
 				}
 			}
 
-            //call parent to do basic stuff
-            IROSHardware::prepareSwitch(start_list, stop_list);
-
             std::string limit_msg = "";
             bool result = checkLimit(limit_msg);
             if(!result) 
@@ -381,19 +378,22 @@ class AuboController : public IROSHardware
                 if( (start_list.size() == 1) && (start_list.front().type == "joint_state_controller/JointStateController") )
                 {
                     ROS_WARN("[HW] Allowing switch controllers to load the joint state controller ONLY. Due to limits violation no other controllers will be permitted, the following joints are out of bounds:\n %s", limit_msg.c_str());
-                    result=true;
                 }else if (start_list.size()==0)
                 {
                     // I guess this is fine.   
-                    result=true;
                 }
                 else
                 {
+                    // Fail the switch
                     ROS_ERROR("[HW] Failed to switch controllers due to limits violation, the following joints are out of bounds:\n %s", limit_msg.c_str());
+                    return(false);
                 }
             }
 
-            return result;
+            //call parent to do basic stuff like mode setting, but only if the switch can succeed.
+            IROSHardware::prepareSwitch(start_list, stop_list);
+
+            return(true);
         }
 
 
