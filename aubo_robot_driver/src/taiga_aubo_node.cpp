@@ -787,9 +787,11 @@ class AuboController : public IROSHardware
 
         bool set_io_output_cb(aubo_msgs::SetIORequest &req, aubo_msgs::SetIOResponse &res)
         {
+            res.success=false;
             if(req.fun==req.FUN_SET_DIGITAL_OUT)
             {
-                robot_interface_->getIoControl()->setStandardDigitalOutput(req.pin, req.state);
+                if(0==robot_interface_->getIoControl()->setStandardDigitalOutput(req.pin, req.state))
+                    res.success=true;
             }
             return(true);
         }
@@ -797,9 +799,11 @@ class AuboController : public IROSHardware
 
         bool set_tool_io_output_cb(aubo_msgs::SetIORequest &req, aubo_msgs::SetIOResponse &res)
         {
+            res.success=false;
             if(req.fun==req.FUN_SET_DIGITAL_OUT)
             {
-                robot_interface_->getIoControl()->setToolDigitalOutput(req.pin, req.state);
+                if(0==robot_interface_->getIoControl()->setToolDigitalOutput(req.pin, req.state))
+                    res.success=true;
             }
             return(true);
         }
