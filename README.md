@@ -29,3 +29,10 @@ roslaunch aubo_robot_driver aubo_bringup.launch robot_model:=aubo_i5 robot_ip:=1
 roslaunch aubo_planning aubo_planning_demo.launch robot_model:=aubo_i5
 
 ```
+
+
+# Taiga desired ARCS/SDK improvements
+- RTDE stream object for robot control mode (ie to replace periodic getRobotControlMode() calls)
+- confirmSafetyParameters() sometimes will fail to set parameters on the robot but still returns 0
+- getSafetyParametersCheckSum() returns a different checksum from the robot than calcSafetyParametersCheckSum() on the outgoing object
+- 

@@ -26,6 +26,7 @@ class AuboController : public IROSHardware
 {
     double servoj_arrival_samples_=2.0;
     double velmode_horizon_samples_=2.0;
+    uint32_t safetyparamschecksum_=0;
     //TODO: sort out public and private later.
     
     public:
@@ -41,6 +42,9 @@ class AuboController : public IROSHardware
         std::string robot_ip_ = "192.168.100.3";
         std::string robot_name_;
         RobotInterfacePtr robot_interface_;
+
+        //safety
+        RobotSafetyParameterRange safetyparams;
 
         // RTDE subscriber data:
         std::mutex rtde_mtx_;
@@ -97,6 +101,11 @@ class AuboController : public IROSHardware
         ros::ServiceServer servomode_on_svc_;
         ros::ServiceServer servomode_off_svc_;
         ros::ServiceServer get_servomode_svc;
+        ros::ServiceServer confirm_safety_params_svc;
+        ros::ServiceServer power_off_svc_;
+        ros::ServiceServer power_on_svc_;
+        ros::ServiceServer get_safety_checksum_svc_;
+        ros::ServiceServer set_tcp_offset_svc_;
 
         /*
             The constructor shall bring up enough of the hardware class to allow for a controller MANAGER to start.
@@ -579,6 +588,14 @@ class AuboController : public IROSHardware
             servomode_on_svc_ = node_handle.advertiseService("servomode_on", &AuboController::servomode_on_cb, this);
             servomode_off_svc_ = node_handle.advertiseService("servomode_off", &AuboController::servomode_off_cb, this);
             get_servomode_svc = node_handle.advertiseService("get_servomode", &AuboController::get_servomode_cb, this);
+            confirm_safety_params_svc = node_handle.advertiseService("confirm_safety_params", &AuboController::confirm_safety_params_cb, this);
+            power_off_svc_ = node_handle.advertiseService("power_off", &AuboController::poweroff_cb, this);
+            
+            power_on_svc_ = node_handle.advertiseService("power_on", &AuboController::poweron_cb, this);
+            get_safety_checksum_svc_ = node_handle.advertiseService("get_safety_checksum", &AuboController::get_safety_checksum_cb, this);
+            set_tcp_offset_svc_ = node_handle.advertiseService("set_tcp_offset", &AuboController::set_tcp_offset_cb, this);
+
+
         }
 
 
@@ -686,7 +703,7 @@ class AuboController : public IROSHardware
                 // Interface call: The robot arm initiates a power-on request
                 // can except, not sure if thatll fail the service or take down the driver
                 auto pret = robot_interface_->getRobotManage()->poweron();
-                if (pret == AUBO_BAD_STATE)
+                if (pret == AUBO_BAD_STATE) //TODO: not equal to 0 i think
                 {
                     msg += "::[AUBO HW] failed to poweron";
                     ROS_ERROR("%s",msg.c_str());
@@ -876,6 +893,160 @@ class AuboController : public IROSHardware
             res.success=true;
             return(true);
 
+        }
+
+
+        bool confirm_safety_params_cb(std_srvs::TriggerRequest &req, std_srvs::TriggerResponse &res)
+        {
+            //just do it for now.
+            res.success=set_safety();
+            // std_srvs::TriggerRequest req_go_op;
+            // std_srvs::TriggerResponse res_go_op;
+            // go_op_svc_cb(req_go_op,res_go_op);
+            // uint32_t cs = robot_interface_->getRobotConfig()->getSafetyParametersCheckSum();
+            // ROS_WARN("cs return %u", cs);
+            res.message="I tried.";   
+            return(true);
+
+        }
+
+
+        bool poweroff_cb(std_srvs::TriggerRequest &req, std_srvs::TriggerResponse &res)
+        {
+            res.success = false;
+            auto pret = robot_interface_->getRobotManage()->poweroff();
+            if (pret == 0)
+            {
+                res.success = true;
+            }
+            {
+                res.message += "::[AUBO HW] failed to poweroff";
+                ROS_ERROR("%s", res.message.c_str());
+            }
+
+            return(res.success);
+        }
+
+
+        bool poweron_cb(std_srvs::TriggerRequest &req, std_srvs::TriggerResponse &res)
+        {
+            res.success = false;
+            auto pret = robot_interface_->getRobotManage()->poweron();
+            if (pret == 0)
+            {
+                res.success = true;
+            }
+            {
+                res.message += "::[AUBO HW] failed to poweron";
+                ROS_ERROR("%s", res.message.c_str());
+            }
+
+            return(res.success);
+        }
+
+        bool get_safety_checksum_cb(std_srvs::TriggerRequest &req, std_srvs::TriggerResponse &res)
+        {
+            RobotSafetyParameterRange test;
+            uint32_t blankchecksum = robot_interface_->getRobotConfig()->calcSafetyParametersCheckSum(test);
+
+            uint32_t cs = robot_interface_->getRobotConfig()->getSafetyParametersCheckSum();
+            ROS_WARN("cs return %u", cs);
+            if (cs==blankchecksum)
+                ROS_ERROR("Checksum from robot is equal to blank safetyparams object (%lu). Doesnt feel safe to me!", blankchecksum);
+
+            if (cs==safetyparamschecksum_)
+                ROS_INFO("Safety checksum matches local value.");
+            else
+                ROS_ERROR("Safety checksum does not match local value, local: %lu  robot: %lu", safetyparamschecksum_, cs);
+
+            res.success = true;
+            return(res.success);
+        }
+
+        bool set_tcp_offset_cb(std_srvs::TriggerRequest &req, std_srvs::TriggerResponse &res)
+        {
+            res.success = false;
+            std::vector<double> offset = {0.0,0.0,0.0,0.0,0.0,0.0};
+            auto pret = robot_interface_->getRobotConfig()->setTcpOffset(offset);
+            if (pret == 0)
+            {
+                res.success = true;
+            }
+            {
+                res.message += "::[AUBO HW] failed to settcp";
+                ROS_ERROR("%s", res.message.c_str());
+            }
+
+            return(res.success);
+        }
+
+
+        bool set_safety()
+        {
+            //load params into struct - two profiles are defined. safetyparams constructor zeros all elements.
+            safetyparams.params[0].power = 800.0;
+            safetyparams.params[0].momentum = 8.0;
+            safetyparams.params[0].stop_time = 0.5;
+            safetyparams.params[0].stop_distance = 0.4;             //TODO: really? this is bad in all spaces
+            // safetyparams.params[0].reduced_entry_time = 0.0;         //not sent in controller json
+            // safetyparams.params[0].reduced_entry_distance = 0.0;
+            safetyparams.params[0].tcp_speed = 4.0;
+            safetyparams.params[0].elbow_speed = 1.0;
+            safetyparams.params[0].tcp_force = 200.0;
+            safetyparams.params[0].elbow_force = 100.0;
+            safetyparams.params[0].qmin = {-3.10,-3.10,-3.10,-3.10,-3.10,-6.28};
+            safetyparams.params[0].qmax = {3.10,3.10,3.10,3.10,3.10,6.28};
+            safetyparams.params[0].qdmax = {3.10,3.10,3.89,3.10,4.13,4.13};
+            safetyparams.params[0].joint_torque = {0,0,0,0,0,0};    //TODO: review
+            safetyparams.params[0].tool_orientation = {0.0, 0.0, 0.0};
+            safetyparams.params[0].tool_deviation = 0.0;
+
+            // PLANES (3*normal, 1*dist)
+            safetyparams.params[0].planes[0] = {0.999999, -0.000794696, -0.00102776, 0.413467};    //TODO: inverse is true on this one, mgiht have to negate the vector
+            safetyparams.params[0].restrict_elbow[0] = 1;
+            safetyparams.params[0].planes[1] = {1.012809637248208e-05, -0.9999999160622001, -0.0004096010429135433, 0.19877};
+            safetyparams.params[0].restrict_elbow[1] = 1;
+
+            //global params that are not profiled
+            safetyparams.safety_home = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+
+            // safetyparams.safety_input_emergency_stop = 0;
+            // safetyparams.safety_input_safeguard_stop = 0;
+            // safetyparams.safety_input_safeguard_reset = 0;
+            // safetyparams.safety_input_auto_safeguard_stop = 0;
+            // safetyparams.safety_input_auto_safeguard_reset = 0;
+            // safetyparams.safety_input_three_position_switch = 0;
+            // safetyparams.safety_input_operational_mode = 0;
+            // safetyparams.safety_input_reduced_mode = 262148;
+            // safetyparams.safety_input_handguide = 0;
+
+            // safetyparams.safety_output_emergency_stop = 65537;
+            // safetyparams.safety_output_not_emergency_stop = 4194368;
+            // safetyparams.safety_output_not_reduced_mode = 1048592;
+            // safetyparams.safety_output_reduced_mode = 262148;
+            // safetyparams.safety_output_robot_moving = 131074;
+            // safetyparams.safety_output_robot_steady = 0;
+            // safetyparams.safety_output_robot_not_stopping = 262148;
+            // safetyparams.safety_output_safe_home = 0;
+            // safetyparams.safety_output_safetyguard_stop = 0;
+
+            safetyparams.tp_3pe_for_handguide = 1;
+            safetyparams.allow_manual_high_speed = 0;
+
+            // copy profile 0 to profile 1
+            safetyparams.params[1] = safetyparams.params[0];
+
+            //calc the crc - gui does not do leave it as zero
+            safetyparamschecksum_ = robot_interface_->getRobotConfig()->calcSafetyParametersCheckSum(safetyparams);
+            ROS_INFO("sending safetyparams with checksum %lu", safetyparamschecksum_);
+            //send the params
+            int setres = robot_interface_->getRobotConfig()->confirmSafetyParameters(safetyparams);
+            if(0!=setres)
+            {
+                ROS_ERROR("confirmSafetyParameters returns failure, value is %d", setres);
+            }
+
+            return(0==setres);
         }
 
 
