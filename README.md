@@ -33,6 +33,8 @@ roslaunch aubo_planning aubo_planning_demo.launch robot_model:=aubo_i5
 
 # Taiga desired ARCS/SDK improvements
 - RTDE stream object for robot control mode (ie to replace periodic getRobotControlMode() calls)
-- confirmSafetyParameters() sometimes will fail to set parameters on the robot but still returns 0
-- getSafetyParametersCheckSum() returns a different checksum from the robot than calcSafetyParametersCheckSum() on the outgoing object
-- 
+- confirmSafetyParameters() sometimes will fail to set parameters on the robot but still returns 0 (success)
+    - ie joint limits > hardware limits (`11/22/24 18:18:40.288869 [1027] WARNING rob1 - Normal Joint[0] max speed(3.10669) exceed the limit, use limit(3.1066860685499065)`)
+    - ie whatever this is: `WARNING legacy_robot1 - safety_monitor.c:562 safety config parameter invalid[CO]: Repetition Bit[8].`
+- getSafetyParametersCheckSum() returns a different checksum from the robot than calcSafetyParametersCheckSum() on the outgoing RobotSafetyParameterRange object
+- It would be nice to shorten the stopping distance of the robot whena plane violation occurs to 5cm or less

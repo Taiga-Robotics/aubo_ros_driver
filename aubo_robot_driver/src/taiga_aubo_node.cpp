@@ -27,85 +27,74 @@ class AuboController : public IROSHardware
     double servoj_arrival_samples_=2.0;
     double velmode_horizon_samples_=2.0;
     uint32_t safetyparamschecksum_=0;
-    //TODO: sort out public and private later.
+    bool estopped_, hangduide_active_;
+    unsigned long activates_=0;
+    JointCmdMode last_robot_cmd_mode_ = MD_NONE, robot_cmd_mode_ = MD_NONE; // also used to determine whether to be in servoj mode or not
     
+    std::shared_ptr<RpcClient> rpc_cli_;
+    std::shared_ptr<RtdeClient> rtde_client_;
+    std::string robot_ip_ = "192.168.100.3";
+    std::string robot_name_;
+    RobotInterfacePtr robot_interface_;
+
+    //safety
+    RobotSafetyParameterRange safetyparams;
+
+    // RTDE subscriber data:
+    std::mutex rtde_mtx_;
+    double timestamp_=0.0, last_rtde_timestamp_=-1.0;
+    std::vector<double> actual_q_{ std::vector<double>(6, 0.) };
+    std::vector<double> actual_qd_{ std::vector<double>(6, 0.) };
+    std::vector<double> actual_qdd_{ std::vector<double>(6, 0.) };
+    std::vector<double> actual_TCP_pose_{ std::vector<double>(6, 0.) };
+    RobotModeType robot_mode_ = RobotModeType::NoController;
+    RobotControlModeType robot_control_mode_ = RobotControlModeType::Unknown;
+    SafetyModeType safety_mode_ = SafetyModeType::Normal;
+    RuntimeState runtime_state_ = RuntimeState::Stopped;
+    double voltage_, current_;
+    std::vector<double> target_q_{ std::vector<double>(6, 0) };
+    std::vector<double> target_qd_{ std::vector<double>(6, 0) };
+    std::vector<double> target_qdd_{ std::vector<double>(6, 0) };
+    int line_{ -1 };
+    bool rtde_data_valid_=false;
+
+    // RTDE IO data
+    std::mutex rtde_input_mtx_;
+    uint64_t IO_inputs_;
+    uint64_t TOOL_IO_inputs_;
+    bool rtde_input_data_valid_=false;
+
+    // ROS Publishers, Services and subscribers
+    std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray> > cmd_out_pub_;
+    std::shared_ptr<realtime_tools::RealtimePublisher<sensor_msgs::JointState> > target_out_pub_;
+    std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Float64> > power_pub_;
+    std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Bool> > estop_pub_;
+    std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Int64> > robot_control_mode_pub_;
+    std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Int64> > robot_mode_pub_;
+    std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Int64> > safety_mode_pub_;
+    std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Int64> > runtime_state_pub_;
+    std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::UInt64> > IO_inputs_pub_;
+    std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::UInt64> > TOOL_IO_inputs_pub_;
+    ros::ServiceServer go_op_svc_;
+    ros::ServiceServer handguide_svc_;
+    ros::ServiceServer set_load_svc_;
+    ros::ServiceServer set_IO_output_svc_;
+    ros::ServiceServer set_tool_IO_output_svc_;
+    ros::ServiceServer set_tool_IO_mode_svc_;
+    ros::ServiceServer clear_protective_stop_svc_;
+    ros::ServiceServer servomode_on_svc_;
+    ros::ServiceServer servomode_off_svc_;
+    ros::ServiceServer get_servomode_svc;
+    ros::ServiceServer confirm_safety_params_svc;
+    ros::ServiceServer power_off_svc_;
+    ros::ServiceServer power_on_svc_;
+    ros::ServiceServer get_safety_checksum_svc_;
+    ros::ServiceServer set_tcp_offset_svc_;
+
+
     public:
-        JointCmdMode last_robot_cmd_mode_ = MD_NONE, robot_cmd_mode_ = MD_NONE; // also used to determine whether to be in servoj mode or not
-        bool estopped_, hangduide_active_;
-        bool use_servoj_mode_=false;
-
-        long int activates_=0;
         unsigned long num_writes_=0;
-        
-        std::shared_ptr<RpcClient> rpc_cli_;
-        std::shared_ptr<RtdeClient> rtde_client_;
-        std::string robot_ip_ = "192.168.100.3";
-        std::string robot_name_;
-        RobotInterfacePtr robot_interface_;
 
-        //safety
-        RobotSafetyParameterRange safetyparams;
-
-        // RTDE subscriber data:
-        std::mutex rtde_mtx_;
-        double timestamp_=0.0, last_rtde_timestamp_=-1.0;
-        std::vector<double> actual_q_{ std::vector<double>(6, 0.) };
-        std::vector<double> actual_qd_{ std::vector<double>(6, 0.) };
-        std::vector<double> actual_qdd_{ std::vector<double>(6, 0.) };
-        std::vector<double> actual_TCP_pose_{ std::vector<double>(6, 0.) };
-        RobotModeType robot_mode_ = RobotModeType::NoController;
-        RobotControlModeType robot_control_mode_ = RobotControlModeType::Unknown;
-        SafetyModeType safety_mode_ = SafetyModeType::Normal;
-        RuntimeState runtime_state_ = RuntimeState::Stopped;
-        double voltage_, current_;
-        std::vector<double> target_q_{ std::vector<double>(6, 0) };
-        std::vector<double> target_qd_{ std::vector<double>(6, 0) };
-        std::vector<double> target_qdd_{ std::vector<double>(6, 0) };
-        int line_{ -1 };
-        bool rtde_data_valid_=false;
-
-
-        // RTDE IO data
-        std::mutex rtde_input_mtx_;
-        uint64_t IO_inputs_;
-        uint64_t TOOL_IO_inputs_;
-        bool rtde_input_data_valid_=false;
-
-        //other
-        std::vector<double> actual_joint_torque_{ std::vector<double>(6, 0.) };
-        std::vector<double> actual_current_{ std::vector<double>(6, 0.1) };
-        std::vector<double> actual_current_e{ std::vector<double>(6, 0) };
-        std::vector<double> actual_TCP_speed_{ std::vector<double>(6, 0.) };
-        std::vector<double> actual_TCP_force_{ std::vector<double>(6, 0.) };
-        std::vector<double> target_TCP_pose_{ std::vector<double>(6, 0.) };
-        std::vector<double> target_TCP_speed_{ std::vector<double>(6, 0.) };
-
-        // ROS Publishers, Services and subscribers
-        std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray> > cmd_out_pub_;
-        std::shared_ptr<realtime_tools::RealtimePublisher<sensor_msgs::JointState> > target_out_pub_;
-        std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Float64> > power_pub_;
-        std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Bool> > estop_pub_;
-        std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Int64> > robot_control_mode_pub_;
-        std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Int64> > robot_mode_pub_;
-        std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Int64> > safety_mode_pub_;
-        std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Int64> > runtime_state_pub_;
-        std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::UInt64> > IO_inputs_pub_;
-        std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::UInt64> > TOOL_IO_inputs_pub_;
-        ros::ServiceServer go_op_svc_;
-        ros::ServiceServer handguide_svc_;
-        ros::ServiceServer set_load_svc_;
-        ros::ServiceServer set_IO_output_svc_;
-        ros::ServiceServer set_tool_IO_output_svc_;
-        ros::ServiceServer set_tool_IO_mode_svc_;
-        ros::ServiceServer clear_protective_stop_svc_;
-        ros::ServiceServer servomode_on_svc_;
-        ros::ServiceServer servomode_off_svc_;
-        ros::ServiceServer get_servomode_svc;
-        ros::ServiceServer confirm_safety_params_svc;
-        ros::ServiceServer power_off_svc_;
-        ros::ServiceServer power_on_svc_;
-        ros::ServiceServer get_safety_checksum_svc_;
-        ros::ServiceServer set_tcp_offset_svc_;
 
         /*
             The constructor shall bring up enough of the hardware class to allow for a controller MANAGER to start.
@@ -163,6 +152,8 @@ class AuboController : public IROSHardware
             hw_state_ = ST_NOT_READY;
 
         }
+
+
         ~AuboController(){};
 
 
@@ -172,9 +163,7 @@ class AuboController : public IROSHardware
         int read(ros::Duration &dt){
             int ret=-1;
             {
-                // double deltat = dt.toSec();
                 std::unique_lock<std::mutex> lck(rtde_mtx_);
-                // if (rtde_data_valid_ && timestamp_ > last_rtde_timestamp_)
                 if (rtde_data_valid_)
                 {
                     last_rtde_timestamp_ = timestamp_;
@@ -182,8 +171,7 @@ class AuboController : public IROSHardware
                     {
                         joint_pos_[jnt] = actual_q_[jnt];
                         joint_vel_[jnt] = actual_qd_[jnt];
-                        joint_eff_[jnt] = actual_qdd_[jnt]; //actual_joint_torque_[jnt];
-                        // last_qd_[jnt] = actual_qd_[jnt];
+                        joint_eff_[jnt] = actual_qdd_[jnt]; 
                     }
                     rtde_data_valid_ = false;
                     data_valid_ = true; //latch for now
@@ -214,7 +202,6 @@ class AuboController : public IROSHardware
             if(estopped_) return(0);
 
             if(robot_cmd_mode_==MD_POSITION){
-                // ROS_DEBUG_THROTTLE(1, "[HW] [write] MD_POSITION");
                 enforceLimit(dt); // will work with pos/vel/effort, depending on configuration
                 double target_time = servoj_arrival_samples_/control_hz_;
                 ret=robot_interface_->getMotionControl()->servoJoint(joint_pos_cmd_, 31.3999, 3.13999, target_time, 0.050123, 200.00);
@@ -228,7 +215,6 @@ class AuboController : public IROSHardware
 
             }
             else if(robot_cmd_mode_==MD_VELOCITY){
-                // ROS_DEBUG_THROTTLE(1, "[HW] [write] MD_VELOCITY");
                 enforceLimit(dt); // will work with pos/vel/effort, depending on configuration
                 double target_time = servoj_arrival_samples_/control_hz_;
                 double horizon_time = velmode_horizon_samples_/control_hz_;
@@ -248,8 +234,6 @@ class AuboController : public IROSHardware
 
             }
             else if(robot_cmd_mode_==MD_POSVEL){
-                // ROS_DEBUG_THROTTLE(1, "[HW] [write] MD_POSVEL");
-                
                 double target_time = servoj_arrival_samples_/control_hz_;
                 double horizon_time = velmode_horizon_samples_/control_hz_;
                 
@@ -357,7 +341,7 @@ class AuboController : public IROSHardware
             // set speed, because the example did it too.
             robot_interface_->getMotionControl()->setSpeedFraction(1.0);
         
-            // ---- SERVOJ mode activation moved to activate() due to timing concerns. ----
+            // ---- SERVOJ mode activation is in activate() due to timing concerns. ----
 
             hw_state_ = ST_INACTIVE;
             return 0;
@@ -524,6 +508,7 @@ class AuboController : public IROSHardware
             return(true);
         }
 
+
         bool waitForRobotControlMode(RobotControlModeType target_control_mode, double max_time=1.5)
         {
             RobotControlModeType current_control_mode;
@@ -541,6 +526,7 @@ class AuboController : public IROSHardware
             } while (current_control_mode != target_control_mode);
             return(true);
         }
+
 
         // broken out into a function for easy transplanting back into aubo_ros_driver
         void init_ancillary_pubs(ros::NodeHandle &node_handle)
@@ -594,8 +580,6 @@ class AuboController : public IROSHardware
             power_on_svc_ = node_handle.advertiseService("power_on", &AuboController::poweron_cb, this);
             get_safety_checksum_svc_ = node_handle.advertiseService("get_safety_checksum", &AuboController::get_safety_checksum_cb, this);
             set_tcp_offset_svc_ = node_handle.advertiseService("set_tcp_offset", &AuboController::set_tcp_offset_cb, this);
-
-
         }
 
 
@@ -699,7 +683,17 @@ class AuboController : public IROSHardware
                 res.message = msg;
                 res.success = true;
 
-            } else {
+            } 
+            else 
+            {
+                // check if we're powered off, and set the safety params first if we are
+                if ( (robot_mode == RobotModeType::PowerOff) && (!set_safety()) ) {
+                    msg += "::[AUBO HW] failed to set safety parameters";
+                    ROS_ERROR("%s",msg.c_str());
+                    res.message = msg;
+                    return(true);
+                }
+
                 // Interface call: The robot arm initiates a power-on request
                 // can except, not sure if thatll fail the service or take down the driver
                 auto pret = robot_interface_->getRobotManage()->poweron();
@@ -708,7 +702,7 @@ class AuboController : public IROSHardware
                     msg += "::[AUBO HW] failed to poweron";
                     ROS_ERROR("%s",msg.c_str());
                     res.message = msg;
-                    return(res.success);
+                    return(true);
                 }
 
                 // Wait for the robot arm to enter idle mode
@@ -733,8 +727,21 @@ class AuboController : public IROSHardware
                 msg += "::The robot arm released the brake successfully, current mode: " + std::to_string(robot_mode);
                 ROS_INFO("The robot arm released the brake successfully, current mode: %d", robot_mode);
             }
+
+            //check to make sure the safetyparameters on the robot are correct
+            if(!get_safety_checksum())
+            {
+                msg += "::Safety checksum invalid";
+                ROS_ERROR("Safety checksum invalid");
+                res.success = false;
+                // auto pret = robot_interface_->getRobotManage()->poweroff();
+            }else
+            {
+                res.success = true;
+            }
+
             res.message = msg;
-            res.success = true;
+            
             return(true);
         }
 
@@ -898,16 +905,10 @@ class AuboController : public IROSHardware
 
         bool confirm_safety_params_cb(std_srvs::TriggerRequest &req, std_srvs::TriggerResponse &res)
         {
-            //just do it for now.
+            //call set safety
             res.success=set_safety();
-            // std_srvs::TriggerRequest req_go_op;
-            // std_srvs::TriggerResponse res_go_op;
-            // go_op_svc_cb(req_go_op,res_go_op);
-            // uint32_t cs = robot_interface_->getRobotConfig()->getSafetyParametersCheckSum();
-            // ROS_WARN("cs return %u", cs);
-            res.message="I tried.";   
+            res.message="";
             return(true);
-
         }
 
 
@@ -944,24 +945,13 @@ class AuboController : public IROSHardware
             return(res.success);
         }
 
+
         bool get_safety_checksum_cb(std_srvs::TriggerRequest &req, std_srvs::TriggerResponse &res)
         {
-            RobotSafetyParameterRange test;
-            uint32_t blankchecksum = robot_interface_->getRobotConfig()->calcSafetyParametersCheckSum(test);
-
-            uint32_t cs = robot_interface_->getRobotConfig()->getSafetyParametersCheckSum();
-            ROS_WARN("cs return %u", cs);
-            if (cs==blankchecksum)
-                ROS_ERROR("Checksum from robot is equal to blank safetyparams object (%lu). Doesnt feel safe to me!", blankchecksum);
-
-            if (cs==safetyparamschecksum_)
-                ROS_INFO("Safety checksum matches local value.");
-            else
-                ROS_ERROR("Safety checksum does not match local value, local: %lu  robot: %lu", safetyparamschecksum_, cs);
-
-            res.success = true;
-            return(res.success);
+            res.success = get_safety_checksum();
+            return(true);
         }
+
 
         bool set_tcp_offset_cb(std_srvs::TriggerRequest &req, std_srvs::TriggerResponse &res)
         {
@@ -984,61 +974,93 @@ class AuboController : public IROSHardware
         bool set_safety()
         {
             //load params into struct - two profiles are defined. safetyparams constructor zeros all elements.
-            safetyparams.params[0].power = 800.0;
-            safetyparams.params[0].momentum = 8.0;
-            safetyparams.params[0].stop_time = 0.5;
-            safetyparams.params[0].stop_distance = 0.4;             //TODO: really? this is bad in all spaces
+            ros::NodeHandle nhsafe(nh_, "safety_config");
+            nhsafe.getParam("power", safetyparams.params[0].power);
+            // safetyparams.params[0].power = 800.0;
+            nhsafe.getParam("momentum", safetyparams.params[0].momentum);
+            // safetyparams.params[0].momentum = 8.0;
+            nhsafe.getParam("stop_time", safetyparams.params[0].stop_time);
+            // safetyparams.params[0].stop_time = 0.1;
+            nhsafe.getParam("stop_distance", safetyparams.params[0].stop_distance);
+            // safetyparams.params[0].stop_distance = 0.1;
             // safetyparams.params[0].reduced_entry_time = 0.0;         //not sent in controller json
             // safetyparams.params[0].reduced_entry_distance = 0.0;
-            safetyparams.params[0].tcp_speed = 4.0;
-            safetyparams.params[0].elbow_speed = 1.0;
-            safetyparams.params[0].tcp_force = 200.0;
-            safetyparams.params[0].elbow_force = 100.0;
-            safetyparams.params[0].qmin = {-3.10,-3.10,-3.10,-3.10,-3.10,-6.28};
-            safetyparams.params[0].qmax = {3.10,3.10,3.10,3.10,3.10,6.28};
-            safetyparams.params[0].qdmax = {3.10,3.10,3.89,3.10,4.13,4.13};
-            safetyparams.params[0].joint_torque = {0,0,0,0,0,0};    //TODO: review
-            safetyparams.params[0].tool_orientation = {0.0, 0.0, 0.0};
+            nhsafe.getParam("tcp_speed", safetyparams.params[0].tcp_speed);
+            // safetyparams.params[0].tcp_speed = 4.0;
+            nhsafe.getParam("elbow_speed", safetyparams.params[0].elbow_speed);
+            // safetyparams.params[0].elbow_speed = 1.0;
+            nhsafe.getParam("tcp_force", safetyparams.params[0].tcp_force);
+            // safetyparams.params[0].tcp_force = 200.0;
+            nhsafe.getParam("elbow_force", safetyparams.params[0].elbow_force);
+            // safetyparams.params[0].elbow_force = 100.0;
+            nhsafe.getParam("qmin", safetyparams.params[0].qmin);
+            // safetyparams.params[0].qmin = {-3.10,-3.10,-3.10,-3.10,-3.10,-6.28};
+            nhsafe.getParam("qmax", safetyparams.params[0].qmax);
+            // safetyparams.params[0].qmax = {3.10,3.10,3.10,3.10,3.10,6.28};
+            nhsafe.getParam("qdmax", safetyparams.params[0].qdmax);
+            // safetyparams.params[0].qdmax = {3.10,3.10,3.89,3.10,4.13,4.13};
+            nhsafe.getParam("joint_torque", safetyparams.params[0].joint_torque);
+            std::vector<float> temp;
+            // safetyparams.params[0].joint_torque = {0,0,0,0,0,0};
+            nhsafe.getParam("tool_orientation", temp);    
+            for(int i=0; i < safetyparams.params[0].tool_orientation.size(); i++) safetyparams.params[0].tool_orientation[i] = temp[i];
+            
+            nhsafe.getParam("tool_deviation", safetyparams.params[0].tool_deviation);
             safetyparams.params[0].tool_deviation = 0.0;
 
             // PLANES (3*normal, 1*dist)
-            safetyparams.params[0].planes[0] = {0.999999, -0.000794696, -0.00102776, 0.413467};    //TODO: inverse is true on this one, mgiht have to negate the vector
-            safetyparams.params[0].restrict_elbow[0] = 1;
-            safetyparams.params[0].planes[1] = {1.012809637248208e-05, -0.9999999160622001, -0.0004096010429135433, 0.19877};
-            safetyparams.params[0].restrict_elbow[1] = 1;
+            // std::map<std::string, std::array<float>> plane_map; - not sure we can do nested maps.
+            // nhsafe.getParam("planes/plane_0/xyzd", plane_map);
+            for(int plane = 0; plane<SAFETY_PLANES_NUM; plane++)
+            {
+                std::string planetag = "planes/plane_" + std::to_string(plane);
+                ROS_INFO("[AUBO HW] looking for safety plane config for: %s\n", planetag.c_str());
+                if(nhsafe.hasParam(planetag))
+                {
+                    ROS_INFO("[AUBO HW] loading safety plane config for plane: %s\n[", planetag.c_str());
+                    nhsafe.getParam(planetag+"/xyzd", temp);
+                    for(int i=0; i < safetyparams.params[0].planes[plane].size(); i++) 
+                    {
+                        safetyparams.params[0].planes[plane][i] = temp[i];
+                        ROS_INFO("[AUBO HW] %f, ",temp[i]);
+                    }
+                    ROS_INFO("[AUBO HW] ]\n");
+                    nhsafe.getParam(planetag+"/restrict_elbow", safetyparams.params[0].restrict_elbow[plane]);
+                    ROS_INFO("[AUBO HW] RESTRICT ELBOW: %d",safetyparams.params[0].restrict_elbow[plane]);
+                }else
+                {
+                    ROS_INFO("[AUBO HW] Done chcecking for safety planes. Total found: %d", plane);
+                    break;
+                }
+            }
+
+            // safetyparams.params[0].planes[0] = {0.999999, -0.000794696, -0.00102776, 0.413467};
+            // safetyparams.params[0].restrict_elbow[0] = 1;
+            // safetyparams.params[0].planes[1] = {1.012809637248208e-05, -0.9999999160622001, -0.0004096010429135433, 0.19877};
+            // safetyparams.params[0].restrict_elbow[1] = 1;
 
             //global params that are not profiled
-            safetyparams.safety_home = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+            nhsafe.getParam("safety_home", safetyparams.safety_home);
+            // safetyparams.safety_home = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 
-            // safetyparams.safety_input_emergency_stop = 0;
-            // safetyparams.safety_input_safeguard_stop = 0;
-            // safetyparams.safety_input_safeguard_reset = 0;
-            // safetyparams.safety_input_auto_safeguard_stop = 0;
-            // safetyparams.safety_input_auto_safeguard_reset = 0;
-            // safetyparams.safety_input_three_position_switch = 0;
-            // safetyparams.safety_input_operational_mode = 0;
-            // safetyparams.safety_input_reduced_mode = 262148;
-            // safetyparams.safety_input_handguide = 0;
+            // all inputs and outputs are left == 0
 
-            // safetyparams.safety_output_emergency_stop = 65537;
-            // safetyparams.safety_output_not_emergency_stop = 4194368;
-            // safetyparams.safety_output_not_reduced_mode = 1048592;
-            // safetyparams.safety_output_reduced_mode = 262148;
-            // safetyparams.safety_output_robot_moving = 131074;
-            // safetyparams.safety_output_robot_steady = 0;
-            // safetyparams.safety_output_robot_not_stopping = 262148;
-            // safetyparams.safety_output_safe_home = 0;
-            // safetyparams.safety_output_safetyguard_stop = 0;
-
-            safetyparams.tp_3pe_for_handguide = 1;
+            nhsafe.getParam("tp_3pe_for_handguide", safetyparams.tp_3pe_for_handguide);
+            // safetyparams.tp_3pe_for_handguide = 1;
+            nhsafe.getParam("allow_manual_high_speed", safetyparams.allow_manual_high_speed);
             safetyparams.allow_manual_high_speed = 0;
 
             // copy profile 0 to profile 1
             safetyparams.params[1] = safetyparams.params[0];
 
-            //calc the crc - gui does not do leave it as zero
-            safetyparamschecksum_ = robot_interface_->getRobotConfig()->calcSafetyParametersCheckSum(safetyparams);
-            ROS_INFO("sending safetyparams with checksum %lu", safetyparamschecksum_);
+            std::string checksum_string;
+            nhsafe.getParam("checksum",checksum_string);
+            safetyparamschecksum_ = atoi(checksum_string.c_str());
+
+            ROS_INFO("[AUBO HW] loaded checksum string: %s, converted to int: %u", checksum_string.c_str(), safetyparamschecksum_);
+
+            ROS_INFO("sending safetyparams with local checksum %u", safetyparamschecksum_);
+
             //send the params
             int setres = robot_interface_->getRobotConfig()->confirmSafetyParameters(safetyparams);
             if(0!=setres)
@@ -1047,6 +1069,31 @@ class AuboController : public IROSHardware
             }
 
             return(0==setres);
+        }
+
+
+        //load the safety checksum from the robot and check it against the locally stored value.
+        bool get_safety_checksum()
+        {
+            bool ret = false;
+
+            uint32_t cs = robot_interface_->getRobotConfig()->getSafetyParametersCheckSum();
+            
+            // create a blank safety object and calculate it's checksum, as a test.
+            // RobotSafetyParameterRange test;
+            // uint32_t blankchecksum = robot_interface_->getRobotConfig()->calcSafetyParametersCheckSum(test);
+            // if (cs==blankchecksum)       //we cant calculate this right now.
+            //     ROS_ERROR("Checksum from robot is equal to blank RobotSafetyParameterRange object (%u). Doesnt feel safe to me!", blankchecksum);
+            
+            if (cs==safetyparamschecksum_)
+            {   
+                ROS_INFO("Safety checksum matches local value.");
+                ret=true;
+            }
+            else
+                ROS_ERROR("Safety checksum does not match local value, local: %u  robot: %u", safetyparamschecksum_, cs);
+
+            return(ret);
         }
 
 
