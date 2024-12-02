@@ -7,6 +7,7 @@
 #include <std_msgs/UInt64.h>
 #include <std_msgs/Bool.h>
 #include <std_msgs/Float64.h>
+#include <std_msgs/String.h>
 #include <std_srvs/Trigger.h>
 #include <sensor_msgs/JointState.h>
 #include <aubo_msgs/SetPayload.h>
@@ -65,6 +66,7 @@ class AuboController : public IROSHardware
     bool rtde_input_data_valid_=false;
 
     // ROS Publishers, Services and subscribers
+    std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::String> > diag_pub_;
     std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray> > cmd_out_pub_;
     std::shared_ptr<realtime_tools::RealtimePublisher<sensor_msgs::JointState> > target_out_pub_;
     std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Float64> > power_pub_;
@@ -259,7 +261,7 @@ class AuboController : public IROSHardware
             }
             else
             {
-                ROS_WARN_THROTTLE(10, "[HW] [write] Unsupported Mode %d.", robot_cmd_mode_);
+                ROS_WARN_THROTTLE(10, "[AUBO HW] [write] Unsupported Mode %d.", robot_cmd_mode_);
                 ret=-9;
             }
 
@@ -268,7 +270,7 @@ class AuboController : public IROSHardware
 
 
         /*
-            CONFIGURE()
+            CONFIGURE() - establish connection to the robot and start the robot to driver RTDE streams
         */
         int configure()
         {
@@ -278,13 +280,24 @@ class AuboController : public IROSHardware
             // set up an RPC client
             rpc_cli_ = std::make_shared<RpcClient>();
             rpc_cli_->setRequestTimeout(1000);  //TODO: perhaps this should be shorter? 
-            rpc_cli_->connect(robot_ip_, 30004);
+            if(0!=rpc_cli_->connect(robot_ip_, 30004))
+            {
+                // connection failed
+                ros_error("RPC Connection failed to " + robot_ip_ + ": 30004");
+                return(-1);
+            }
             rpc_cli_->login("aubo", "123456");   //no evidence the u/p combo is sent to the robot at any time
 
             ROS_INFO("[AUBO HW] Connecting RTDE...");
             // set up an RTDE client
             rtde_client_ = std::make_shared<RtdeClient>();
-            rtde_client_->connect(robot_ip_, 30010);
+            if(-1==rtde_client_->connect(robot_ip_, 30010))
+            {
+                // connection failed
+                ros_error("RTDE Connection failed to " + robot_ip_ + ": 30010");
+                return(-1);
+            }
+
             rtde_client_->login("aubo", "123456");
 
             
@@ -355,10 +368,10 @@ class AuboController : public IROSHardware
 			//ONLY START STATE CONTROLLER WITHOUT VALID READ
 			for(auto controller : start_list){
 				if( (controller.type != "joint_state_controller/JointStateController") && (!data_valid_) ){
-					ROS_ERROR("[HW] [prepareSwitch] [START] cannot start controller prior to valid read()");
-					ROS_DEBUG("[HW] [prepareSwitch] [START] requested controller:");
-					ROS_DEBUG("[HW] [prepareSwitch] [START] --> NAME:  %s", controller.name.c_str());
-					ROS_DEBUG("[HW] [prepareSwitch] [START] --> TYPE: %s", controller.type.c_str());
+					ROS_ERROR("[AUBO HW] [prepareSwitch] [START] cannot start controller prior to valid read()");
+					ROS_DEBUG("[AUBO HW] [prepareSwitch] [START] requested controller:");
+					ROS_DEBUG("[AUBO HW] [prepareSwitch] [START] --> NAME:  %s", controller.name.c_str());
+					ROS_DEBUG("[AUBO HW] [prepareSwitch] [START] --> TYPE: %s", controller.type.c_str());
 					return false;
 				}
 			}
@@ -370,7 +383,7 @@ class AuboController : public IROSHardware
                 //allow the JSC to start even if we're out of bounds.
                 if( (start_list.size() == 1) && (start_list.front().type == "joint_state_controller/JointStateController") )
                 {
-                    ROS_WARN("[HW] Allowing switch controllers to load the joint state controller ONLY. Due to limits violation no other controllers will be permitted, the following joints are out of bounds:\n %s", limit_msg.c_str());
+                    ROS_WARN("[AUBO HW] Allowing switch controllers to load the joint state controller ONLY. Due to limits violation no other controllers will be permitted, the following joints are out of bounds:\n %s", limit_msg.c_str());
                 }else if (start_list.size()==0)
                 {
                     // I guess this is fine.   
@@ -378,7 +391,8 @@ class AuboController : public IROSHardware
                 else
                 {
                     // Fail the switch
-                    ROS_ERROR("[HW] Failed to switch controllers due to limits violation, the following joints are out of bounds:\n %s", limit_msg.c_str());
+                    // ROS_ERROR("[AUBO HW] Failed to switch controllers due to limits violation, the following joints are out of bounds:\n %s", limit_msg.c_str());
+                    ros_error("[AUBO HW] Failed to switch controllers due to limits violation, the following joints are out of bounds:\n " + limit_msg);
                     return(false);
                 }
             }
@@ -393,7 +407,7 @@ class AuboController : public IROSHardware
 		void doSwitch(const std::list<hardware_interface::ControllerInfo> &start_list,
 					const std::list<hardware_interface::ControllerInfo> &stop_list){
             robot_cmd_mode_ = joint_modes_[0]; // just set the robot control mode to be the mode of the first joint;
-			ROS_INFO("[HW] [doSwitch]: Switching Controllers, mode == %d", robot_cmd_mode_);
+			ROS_INFO("[AUBO HW] [doSwitch]: Switching Controllers, mode == %d", robot_cmd_mode_);
 		
             //enter servoj mode
             if (last_robot_cmd_mode_!=robot_cmd_mode_) 
@@ -528,9 +542,29 @@ class AuboController : public IROSHardware
         }
 
 
+        // this ros_error takes a string and publishes it to the console using ROS_ERROR, and also
+        // publishes the same string to ~diagnostics
+        void ros_error(std::string errstring)
+        {
+            ROS_ERROR("[AUBO HW] %s", errstring.c_str());
+            double now = ros::Time::now().toSec();
+            if (diag_pub_->trylock())
+            {
+                // construct json manually to avoid nlohmann::json dependancy
+                diag_pub_->msg_.data = "{\"level\": \"error\", \"timestamp\": " + 
+                                        std::to_string(now) + ", \"message\": \"" + 
+                                        errstring +"\", \"source\": \"aubo driver\"}";
+            }
+            diag_pub_->unlockAndPublish();
+        }
+
+
         // broken out into a function for easy transplanting back into aubo_ros_driver
         void init_ancillary_pubs(ros::NodeHandle &node_handle)
         {
+            // diag publisher
+            diag_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::String>(node_handle, "diagnostics", 1));
+            diag_pub_->msg_.data="";
 
             target_out_pub_.reset(new realtime_tools::RealtimePublisher<sensor_msgs::JointState>(node_handle, "target_state", 1));
             target_out_pub_->msg_.name = joint_name_;
@@ -660,25 +694,26 @@ class AuboController : public IROSHardware
             std::string msg;
             if (in_zerog)
             {
-                msg += "::[AUBO HW] robot is in zerog mode [" + std::to_string((int)robot_control_mode) + "]. Disabling first";
+                msg += "::robot is in zerog mode [" + std::to_string((int)robot_control_mode) + "]. Disabling first";
                 ROS_INFO("%s",msg.c_str());
                 int retval = robot_interface_->getRobotManage()->freedrive(false);
                 if (retval==0)
                 {
                     hangduide_active_ = false;
-                    msg += "::[AUBO HW] Successfully exited zerog";
+                    msg += "::Successfully exited zerog";
                     ROS_INFO("%s",msg.c_str());
                 }
                 else{
-                    msg += "::[AUBO HW] could not take robot out of zerog/freedrive";
-                    ROS_ERROR("%s",msg.c_str());
+                    msg += "::could not take robot out of zerog/freedrive";
+                    // ROS_ERROR("%s",msg.c_str());
+                    ros_error(msg);
                     res.message = msg;
                     return(res.success);
                 }
             }
             
             if (robot_mode == RobotModeType::Running) {
-                msg += "::[AUBO HW] The robot arm has already released the brake and is already in running mode, no action taken.";
+                msg += "::The robot arm has already released the brake and is already in running mode, no action taken.";
                 ROS_INFO("%s",msg.c_str());
                 res.message = msg;
                 res.success = true;
@@ -688,8 +723,9 @@ class AuboController : public IROSHardware
             {
                 // check if we're powered off, and set the safety params first if we are
                 if ( (robot_mode == RobotModeType::PowerOff) && (!set_safety()) ) {
-                    msg += "::[AUBO HW] failed to set safety parameters";
-                    ROS_ERROR("%s",msg.c_str());
+                    msg += "::failed to set safety parameters";
+                    // ROS_ERROR("%s",msg.c_str());
+                    ros_error(msg);
                     res.message = msg;
                     return(true);
                 }
@@ -699,8 +735,9 @@ class AuboController : public IROSHardware
                 auto pret = robot_interface_->getRobotManage()->poweron();
                 if (pret == AUBO_BAD_STATE) //TODO: not equal to 0 i think
                 {
-                    msg += "::[AUBO HW] failed to poweron";
-                    ROS_ERROR("%s",msg.c_str());
+                    msg += "::failed to poweron";
+                    // ROS_ERROR("%s",msg.c_str());
+                    ros_error(msg);
                     res.message = msg;
                     return(true);
                 }
@@ -708,8 +745,9 @@ class AuboController : public IROSHardware
                 // Wait for the robot arm to enter idle mode
                 if(0!=waitForRobotMode(RobotModeType::Idle))
                 {
-                    msg += "::[AUBO HW] Failed to transition to idle after poweron command";
-                    ROS_ERROR("[AUBO HW] Failed to transition to idle after poweron command");
+                    msg += "::Failed to transition to idle after poweron command";
+                    // ROS_ERROR("[AUBO HW] Failed to transition to idle after poweron command");
+                    ros_error(msg);
 
                 }
 
@@ -732,7 +770,8 @@ class AuboController : public IROSHardware
             if(!get_safety_checksum())
             {
                 msg += "::Safety checksum invalid";
-                ROS_ERROR("Safety checksum invalid");
+                // ROS_ERROR("Safety checksum invalid");
+                ros_error(msg);
                 res.success = false;
                 // auto pret = robot_interface_->getRobotManage()->poweroff();
             }else
@@ -752,11 +791,11 @@ class AuboController : public IROSHardware
             res.success = false;
             res.message = "";
             std::string msg;
-            RobotControlModeType target_mode = RobotControlModeType::Unknown;
-            if (req.data)
-            {
-                target_mode = RobotControlModeType::Freedrive;
-            }
+            // RobotControlModeType target_mode = RobotControlModeType::Unknown;
+            // if (req.data)
+            // {
+            //     target_mode = RobotControlModeType::Freedrive;
+            // }
             
             int retval = robot_interface_->getRobotManage()->freedrive(req.data);
             if (retval==0) 
@@ -801,7 +840,8 @@ class AuboController : public IROSHardware
             }
             else
             {
-                ROS_ERROR("Could not set payload. Error Code: %d",setload_ret);
+                // ROS_ERROR("Could not set payload. Error Code: %d",setload_ret);
+                ros_error("Could not set payload. Error Code: " + std::to_string(setload_ret));
                 res.success = false;
             }
             
@@ -921,8 +961,9 @@ class AuboController : public IROSHardware
                 res.success = true;
             }
             {
-                res.message += "::[AUBO HW] failed to poweroff";
-                ROS_ERROR("%s", res.message.c_str());
+                res.message += "::failed to poweroff";
+                // ROS_ERROR("%s", res.message.c_str());
+                ros_error(res.message);
             }
 
             return(res.success);
@@ -938,8 +979,9 @@ class AuboController : public IROSHardware
                 res.success = true;
             }
             {
-                res.message += "::[AUBO HW] failed to poweron";
-                ROS_ERROR("%s", res.message.c_str());
+                res.message += "::failed to poweron";
+                // ROS_ERROR("%s", res.message.c_str());
+                ros_error(res.message);
             }
 
             return(res.success);
@@ -963,8 +1005,9 @@ class AuboController : public IROSHardware
                 res.success = true;
             }
             {
-                res.message += "::[AUBO HW] failed to settcp";
-                ROS_ERROR("%s", res.message.c_str());
+                res.message += ":: failed to set tool centrepoint offset";
+                // ROS_ERROR("%s", res.message.c_str());
+                ros_error(res.message);
             }
 
             return(res.success);
@@ -1003,7 +1046,7 @@ class AuboController : public IROSHardware
             std::vector<float> temp;
             // safetyparams.params[0].joint_torque = {0,0,0,0,0,0};
             nhsafe.getParam("tool_orientation", temp);    
-            for(int i=0; i < safetyparams.params[0].tool_orientation.size(); i++) safetyparams.params[0].tool_orientation[i] = temp[i];
+            for(unsigned int i=0; i < safetyparams.params[0].tool_orientation.size(); i++) safetyparams.params[0].tool_orientation[i] = temp[i];
             
             nhsafe.getParam("tool_deviation", safetyparams.params[0].tool_deviation);
             safetyparams.params[0].tool_deviation = 0.0;
@@ -1019,7 +1062,7 @@ class AuboController : public IROSHardware
                 {
                     ROS_INFO("[AUBO HW] loading safety plane config for plane: %s\n[", planetag.c_str());
                     nhsafe.getParam(planetag+"/xyzd", temp);
-                    for(int i=0; i < safetyparams.params[0].planes[plane].size(); i++) 
+                    for(unsigned int i=0; i < safetyparams.params[0].planes[plane].size(); i++) 
                     {
                         safetyparams.params[0].planes[plane][i] = temp[i];
                         ROS_INFO("[AUBO HW] %f, ",temp[i]);
@@ -1065,7 +1108,8 @@ class AuboController : public IROSHardware
             int setres = robot_interface_->getRobotConfig()->confirmSafetyParameters(safetyparams);
             if(0!=setres)
             {
-                ROS_ERROR("confirmSafetyParameters returns failure, value is %d", setres);
+                // ROS_ERROR("confirmSafetyParameters returns failure, value is %d", setres);
+                ros_error("confirmSafetyParameters returns failure, value is " + std::to_string(setres));
             }
 
             return(0==setres);
@@ -1091,7 +1135,11 @@ class AuboController : public IROSHardware
                 ret=true;
             }
             else
-                ROS_ERROR("Safety checksum does not match local value, local: %u  robot: %u", safetyparamschecksum_, cs);
+            {
+                // ROS_ERROR("Safety checksum does not match local value, local: %u  robot: %u", safetyparamschecksum_, cs);
+                ros_error("Safety checksum does not match local value, local: " + std::to_string(safetyparamschecksum_) + "  robot: " + std::to_string(cs));
+            }
+
 
             return(ret);
         }
@@ -1136,12 +1184,12 @@ int main(int argc, char** argv){
 
     //init
     if(hw.configure()!=0){
-        //TODO: handle if returned false
-        return -1; // exit
+        return -1; // handle failure to communicate with an exit
     }
 
     if(hw.getState() != ST_INACTIVE){
-        ROS_ERROR("[AUBO HW] could not completely configure robot. Terminating");
+        // ROS_ERROR("[AUBO HW] could not completely configure robot. Terminating");
+        hw.ros_error("[AUBO HW] could not completely configure robot. Terminating");
         return -6;
     }
     std::cout<<"[AUBO HW] configured STATE: " << hw.getState() << std::endl;
@@ -1181,7 +1229,7 @@ int main(int argc, char** argv){
             read_missed++;
             if(read_missed>5)
             {
-                ROS_ERROR_THROTTLE(1, "[AUBO HW] %d consecutive reads missed", read_missed);
+                ROS_WARN_THROTTLE(1, "[AUBO HW] %d consecutive reads missed", read_missed);
             }
         }else{
             read_missed=0;

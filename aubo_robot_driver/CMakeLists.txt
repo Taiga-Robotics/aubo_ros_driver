@@ -64,7 +64,6 @@ find_package(catkin REQUIRED
     aubo_msgs
     ### taiga specific packages:
     ros_control_hw_interface
-    iris_support_msgs
 )
 
 find_package(Boost REQUIRED)
