@@ -118,6 +118,16 @@ class AuboController : public IROSHardware
             }
             control_hz_=control_hz;
 
+            std::string robot_ip="";
+            if(!node_handle.getParam("robot_ip", robot_ip)) 
+            {
+                ROS_WARN("Robot IP not specified in driver namespace %s", node_handle.getNamespace().c_str());
+                robot_ip = "192.168.100.3";
+
+            }
+            robot_ip_=robot_ip;
+
+
             double sj_arrival_samples=2.0;
             if(!node_handle.getParam("servoj_arrival_samples", sj_arrival_samples)) 
             {
