@@ -775,10 +775,10 @@ class AuboController : public IROSHardware
             //check to make sure the safetyparameters on the robot are correct
             if(!get_safety_checksum())
             {
-                msg += "::Safety checksum invalid";
+                msg += "::Safety checksum invalid, POWERING OFF THE ROBOT. CALL TAIGA SUPPORT.";
                 ros_error(msg);
                 res.success = false;
-                // auto pret = robot_interface_->getRobotManage()->poweroff();
+                robot_interface_->getRobotManage()->poweroff();
             }else
             {
                 res.success = true;
