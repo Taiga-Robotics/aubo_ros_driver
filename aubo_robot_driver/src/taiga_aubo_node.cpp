@@ -705,17 +705,16 @@ class AuboController : public IROSHardware
             if (in_zerog)
             {
                 msg += "::robot is in zerog mode [" + std::to_string((int)robot_control_mode) + "]. Disabling first";
-                ROS_INFO("%s",msg.c_str());
+                ROS_INFO("[AUBO HW] %s",msg.c_str());
                 int retval = robot_interface_->getRobotManage()->freedrive(false);
                 if (retval==0)
                 {
                     hangduide_active_ = false;
                     msg += "::Successfully exited zerog";
-                    ROS_INFO("%s",msg.c_str());
+                    ROS_INFO("[AUBO HW] %s",msg.c_str());
                 }
                 else{
                     msg += "::could not take robot out of zerog/freedrive";
-                    // ROS_ERROR("%s",msg.c_str());
                     ros_error(msg);
                     res.message = msg;
                     return(res.success);
@@ -724,7 +723,7 @@ class AuboController : public IROSHardware
             
             if (robot_mode == RobotModeType::Running) {
                 msg += "::The robot arm has already released the brake and is already in running mode, no action taken.";
-                ROS_INFO("%s",msg.c_str());
+                ROS_INFO("[AUBO HW] %s",msg.c_str());
                 res.message = msg;
                 res.success = true;
 
@@ -734,7 +733,6 @@ class AuboController : public IROSHardware
                 // check if we're powered off, and set the safety params first if we are
                 if ( (robot_mode == RobotModeType::PowerOff) && (!set_safety()) ) {
                     msg += "::failed to set safety parameters";
-                    // ROS_ERROR("%s",msg.c_str());
                     ros_error(msg);
                     res.message = msg;
                     return(true);
@@ -746,7 +744,6 @@ class AuboController : public IROSHardware
                 if (pret == AUBO_BAD_STATE) //TODO: not equal to 0 i think
                 {
                     msg += "::failed to poweron";
-                    // ROS_ERROR("%s",msg.c_str());
                     ros_error(msg);
                     res.message = msg;
                     return(true);
@@ -756,14 +753,13 @@ class AuboController : public IROSHardware
                 if(0!=waitForRobotMode(RobotModeType::Idle))
                 {
                     msg += "::Failed to transition to idle after poweron command";
-                    // ROS_ERROR("[AUBO HW] Failed to transition to idle after poweron command");
                     ros_error(msg);
 
                 }
 
                 int robot_mode = (int) robot_interface_->getRobotState()->getRobotModeType();
                 msg += "::The robotic arm is powered on successfully, current mode: " + std::to_string(robot_mode);
-                ROS_INFO("The robotic arm is powered on successfully, current mode: %d", robot_mode);
+                ROS_INFO("[AUBO HW] The robotic arm is powered on successfully, current mode: %d", robot_mode);
 
                 // Interface call: The robot arm initiates a brake release request
                 robot_interface_->getRobotManage()->startup();
@@ -773,14 +769,13 @@ class AuboController : public IROSHardware
 
                 robot_mode = (int) robot_interface_->getRobotState()->getRobotModeType();
                 msg += "::The robot arm released the brake successfully, current mode: " + std::to_string(robot_mode);
-                ROS_INFO("The robot arm released the brake successfully, current mode: %d", robot_mode);
+                ROS_INFO("[AUBO HW] The robot arm released the brake successfully, current mode: %d", robot_mode);
             }
 
             //check to make sure the safetyparameters on the robot are correct
             if(!get_safety_checksum())
             {
                 msg += "::Safety checksum invalid";
-                // ROS_ERROR("Safety checksum invalid");
                 ros_error(msg);
                 res.success = false;
                 // auto pret = robot_interface_->getRobotManage()->poweroff();
@@ -1112,7 +1107,7 @@ class AuboController : public IROSHardware
 
             ROS_INFO("[AUBO HW] loaded checksum string: %s, converted to int: %u", checksum_string.c_str(), safetyparamschecksum_);
 
-            ROS_INFO("sending safetyparams with local checksum %u", safetyparamschecksum_);
+            ROS_INFO("[AUBO HW] sending safetyparams with local checksum %u", safetyparamschecksum_);
 
             //send the params
             int setres = robot_interface_->getRobotConfig()->confirmSafetyParameters(safetyparams);
@@ -1141,7 +1136,7 @@ class AuboController : public IROSHardware
             
             if (cs==safetyparamschecksum_)
             {   
-                ROS_INFO("Safety checksum matches local value.");
+                ROS_INFO("[AUBO HW] Safety checksum matches local value.");
                 ret=true;
             }
             else
