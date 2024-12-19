@@ -47,7 +47,7 @@ find_package(catkin REQUIRED
     controller_manager_msgs
     geometry_msgs
     hardware_interface
-    industrial_robot_status_interface
+    # industrial_robot_status_interface
     pluginlib
     roscpp
     # scaled_joint_trajectory_controller

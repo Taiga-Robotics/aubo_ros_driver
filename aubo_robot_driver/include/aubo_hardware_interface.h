@@ -37,7 +37,7 @@
 #include <aubo_dashboard_msgs/RobotMode.h>
 #include <aubo_dashboard_msgs/SafetyMode.h>
 
-#include <industrial_robot_status_interface/industrial_robot_status_interface.h>
+// #include <industrial_robot_status_interface/industrial_robot_status_interface.h>
 #include <kdl/frames.hpp>
 #include <mutex>
 

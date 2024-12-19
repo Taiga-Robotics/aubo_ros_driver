@@ -17,7 +17,7 @@
   <buildtool_depend>catkin</buildtool_depend>
 
   <build_depend>boost</build_depend>
-  <build_depend>industrial_robot_status_interface</build_depend>
+  <!-- <build_depend>industrial_robot_status_interface</build_depend> -->
 
   <!-- taiga specific packages -->
   <depend>ros_control_hw_interface</depend>
@@ -48,7 +48,7 @@
 
   <exec_depend>cartesian_trajectory_controller</exec_depend>
   <exec_depend>force_torque_sensor_controller</exec_depend>
-  <exec_depend>industrial_robot_status_controller</exec_depend>
+  <!-- <exec_depend>industrial_robot_status_controller</exec_depend> -->
   <exec_depend>joint_state_controller</exec_depend>
   <exec_depend>joint_trajectory_controller</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
