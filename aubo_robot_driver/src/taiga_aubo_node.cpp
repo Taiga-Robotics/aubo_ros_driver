@@ -39,6 +39,7 @@ class AuboController : public IROSHardware
     RobotInterfacePtr robot_interface_;
 
     //safety
+    std::string safety_config_space_ = "safety_config";
     RobotSafetyParameterRange safetyparams;
 
     // RTDE subscriber data:
@@ -731,7 +732,7 @@ class AuboController : public IROSHardware
             else 
             {
                 // check if we're powered off, and set the safety params first if we are
-                if ( (robot_mode == RobotModeType::PowerOff) && (!set_safety()) ) {
+                if ( (robot_mode == RobotModeType::PowerOff) && (!set_safety(safety_config_space_)) ) {
                     msg += "::failed to set safety parameters";
                     ros_error(msg);
                     res.message = msg;
@@ -951,7 +952,7 @@ class AuboController : public IROSHardware
         bool confirm_safety_params_cb(std_srvs::TriggerRequest &req, std_srvs::TriggerResponse &res)
         {
             //call set safety
-            res.success=set_safety();
+            res.success=set_safety(safety_config_space_);
             res.message="";
             return(true);
         }
@@ -1019,46 +1020,29 @@ class AuboController : public IROSHardware
         }
 
 
-        bool set_safety()
+        bool set_safety(std::string config_space)
         {
             //load params into struct - two profiles are defined. safetyparams constructor zeros all elements.
-            ros::NodeHandle nhsafe(nh_, "safety_config");
+            ros::NodeHandle nhsafe(nh_, config_space);
             nhsafe.getParam("power", safetyparams.params[0].power);
-            // safetyparams.params[0].power = 800.0;
             nhsafe.getParam("momentum", safetyparams.params[0].momentum);
-            // safetyparams.params[0].momentum = 8.0;
             nhsafe.getParam("stop_time", safetyparams.params[0].stop_time);
-            // safetyparams.params[0].stop_time = 0.1;
             nhsafe.getParam("stop_distance", safetyparams.params[0].stop_distance);
-            // safetyparams.params[0].stop_distance = 0.1;
-            // safetyparams.params[0].reduced_entry_time = 0.0;         //not sent in controller json
-            // safetyparams.params[0].reduced_entry_distance = 0.0;
             nhsafe.getParam("tcp_speed", safetyparams.params[0].tcp_speed);
-            // safetyparams.params[0].tcp_speed = 4.0;
             nhsafe.getParam("elbow_speed", safetyparams.params[0].elbow_speed);
-            // safetyparams.params[0].elbow_speed = 1.0;
             nhsafe.getParam("tcp_force", safetyparams.params[0].tcp_force);
-            // safetyparams.params[0].tcp_force = 200.0;
             nhsafe.getParam("elbow_force", safetyparams.params[0].elbow_force);
-            // safetyparams.params[0].elbow_force = 100.0;
             nhsafe.getParam("qmin", safetyparams.params[0].qmin);
-            // safetyparams.params[0].qmin = {-3.10,-3.10,-3.10,-3.10,-3.10,-6.28};
             nhsafe.getParam("qmax", safetyparams.params[0].qmax);
-            // safetyparams.params[0].qmax = {3.10,3.10,3.10,3.10,3.10,6.28};
             nhsafe.getParam("qdmax", safetyparams.params[0].qdmax);
-            // safetyparams.params[0].qdmax = {3.10,3.10,3.89,3.10,4.13,4.13};
             nhsafe.getParam("joint_torque", safetyparams.params[0].joint_torque);
+            nhsafe.getParam("tool_deviation", safetyparams.params[0].tool_deviation);
+
             std::vector<float> temp;
-            // safetyparams.params[0].joint_torque = {0,0,0,0,0,0};
             nhsafe.getParam("tool_orientation", temp);    
             for(unsigned int i=0; i < safetyparams.params[0].tool_orientation.size(); i++) safetyparams.params[0].tool_orientation[i] = temp[i];
-            
-            nhsafe.getParam("tool_deviation", safetyparams.params[0].tool_deviation);
-            safetyparams.params[0].tool_deviation = 0.0;
 
             // PLANES (3*normal, 1*dist)
-            // std::map<std::string, std::array<float>> plane_map; - not sure we can do nested maps.
-            // nhsafe.getParam("planes/plane_0/xyzd", plane_map);
             for(int plane = 0; plane<SAFETY_PLANES_NUM; plane++)
             {
                 std::string planetag = "planes/plane_" + std::to_string(plane);
@@ -1077,28 +1061,22 @@ class AuboController : public IROSHardware
                     ROS_INFO("[AUBO HW] RESTRICT ELBOW: %d",safetyparams.params[0].restrict_elbow[plane]);
                 }else
                 {
-                    ROS_INFO("[AUBO HW] Done chcecking for safety planes. Total found: %d", plane);
+                    ROS_INFO("[AUBO HW] Done loading safety planes. Total found: %d", plane);
                     break;
                 }
+                
             }
-
-            // safetyparams.params[0].planes[0] = {0.999999, -0.000794696, -0.00102776, 0.413467};
-            // safetyparams.params[0].restrict_elbow[0] = 1;
-            // safetyparams.params[0].planes[1] = {1.012809637248208e-05, -0.9999999160622001, -0.0004096010429135433, 0.19877};
-            // safetyparams.params[0].restrict_elbow[1] = 1;
 
             //global params that are not profiled
             nhsafe.getParam("safety_home", safetyparams.safety_home);
-            // safetyparams.safety_home = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 
             // all inputs and outputs are left == 0
 
             nhsafe.getParam("tp_3pe_for_handguide", safetyparams.tp_3pe_for_handguide);
-            // safetyparams.tp_3pe_for_handguide = 1;
             nhsafe.getParam("allow_manual_high_speed", safetyparams.allow_manual_high_speed);
             safetyparams.allow_manual_high_speed = 0;
 
-            // copy profile 0 to profile 1
+            // copy profile 0 to profile 1 (could be 0 - normal and 1 - reduced)
             safetyparams.params[1] = safetyparams.params[0];
 
             std::string checksum_string;
@@ -1113,7 +1091,6 @@ class AuboController : public IROSHardware
             int setres = robot_interface_->getRobotConfig()->confirmSafetyParameters(safetyparams);
             if(0!=setres)
             {
-                // ROS_ERROR("confirmSafetyParameters returns failure, value is %d", setres);
                 ros_error("confirmSafetyParameters returns failure, value is " + std::to_string(setres));
             }
 
@@ -1141,7 +1118,6 @@ class AuboController : public IROSHardware
             }
             else
             {
-                // ROS_ERROR("Safety checksum does not match local value, local: %u  robot: %u", safetyparamschecksum_, cs);
                 ros_error("Safety checksum does not match local value, local: " + std::to_string(safetyparamschecksum_) + "  robot: " + std::to_string(cs));
             }
 
