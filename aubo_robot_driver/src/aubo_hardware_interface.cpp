@@ -7,34 +7,45 @@ AuboHardwareInterface::AuboHardwareInterface()
 
 AuboHardwareInterface::AuboHardwareInterface(ros::NodeHandle &nh) : nh_(nh)
 {
+    printf("[HW] constructor\n");
 }
 
 bool AuboHardwareInterface::init(ros::NodeHandle &root_nh,
                                  ros::NodeHandle &robot_hw_nh)
 {
+    printf("[HW] init\n");
     if (!nh_.getParam("robot_ip", robot_ip_)) {
         ROS_ERROR_STREAM("Required parameter " << nh_.resolveName("robot_ip")
                                                << " not given." << robot_ip_);
         return false;
     }
 
+    printf("[HW] init - make_shared<RpcClient>\n");
     rpc_client_ = std::make_shared<RpcClient>();
 
+    printf("[HW] init - setRequestTimeout(1000);\n");
     rpc_client_->setRequestTimeout(1000);
     // 接口调用: 连接到 RPC 服务
+    printf("[HW] init - connect\n");
     rpc_client_->connect(robot_ip_, 30004);
     // 接口调用: 登录
+    printf("[HW] init - login\n");
     rpc_client_->login("aubo", "123456");
 
+    printf("[HW] init - make_shared<RtdeClient>\n");
     rtde_client_ = std::make_shared<RtdeClient>();
     // 接口调用: 连接到 RTDE 服务
+    printf("[HW] init - connect\n");
     rtde_client_->connect(robot_ip_, 30010);
     // 接口调用: 登录
+    printf("[HW] init - login\n");
     rtde_client_->login("aubo", "123456");
+    printf("[HW] init - rtde_client_->setTopic\n");
     int topic = rtde_client_->setTopic(false, { "R1_message" }, 200, 0);
     if (topic < 0) {
         std::cout << "Set topic fail!" << std::endl;
     }
+    printf("[HW] init - rtde_client_->subscribe\n");
     rtde_client_->subscribe(topic, [](InputParser &parser) {
         arcs::common_interface::RobotMsgVector msgs;
         msgs = parser.popRobotMsgVector();
@@ -45,10 +56,15 @@ bool AuboHardwareInterface::init(ros::NodeHandle &root_nh,
         }
         //TODO: nuke above
     });
+
+
+    
     // 设置rtde输入
+    printf("[HW] init - setInput(rtde_client_)\n");
     setInput(rtde_client_);
 
     // 配置输出
+    printf("[HW] init - configSubscribe(rtde_client_)\n");
     configSubscribe(rtde_client_);
     if (!nh_.getParam("/aubo_hardware_interface/joints", joint_names_)) {
         ROS_ERROR_STREAM("Cannot find required parameter "
@@ -59,7 +75,7 @@ bool AuboHardwareInterface::init(ros::NodeHandle &root_nh,
             "'controller_joint_names' on the parameter server.");
     }
     // Create ros_control interfaces
-
+    printf("[HW] init - ros control handles\n");
     for (std::size_t i = 0; i < actual_q_.size(); ++i) {
         ROS_DEBUG_STREAM("Registering handles for joint " << joint_names_[i]);
         // Create joint state interface for all joints
@@ -68,6 +84,7 @@ bool AuboHardwareInterface::init(ros::NodeHandle &root_nh,
             &actual_current_[i]));
         ROS_INFO("joint_names_[i]:%s", joint_names_[i].data());
         // Create joint position control interface
+        printf("[HW] init - interface\n");
         pj_interface_.registerHandle(hardware_interface::JointHandle(
             js_interface_.getHandle(joint_names_[i]),
             &joint_position_command_[i]));
@@ -76,6 +93,8 @@ bool AuboHardwareInterface::init(ros::NodeHandle &root_nh,
         //            &joint_position_command_[i], &speed_scaling_combined_));
     }
 
+
+    printf("[HW] init - register\n");
     registerInterface(&js_interface_);
     registerInterface(&pj_interface_);
 
@@ -87,37 +106,51 @@ bool AuboHardwareInterface::init(ros::NodeHandle &root_nh,
 void AuboHardwareInterface::read(const ros::Time &time,
                                  const ros::Duration &period)
 {
+    printf("[HW] read - \n");
     readActualQ();
 }
 
 void AuboHardwareInterface::write(const ros::Time &time,
                                   const ros::Duration &period)
 {
+    printf("[HW] write - \n");
+    std::cout<<"[HW] joins as they would be commanded ::: \n[";
+    for(int i=0; i< 6; i++){
+        std::cout<<joint_position_command_[i]<<", ";
+    }
+    std::cout<<"]\n";
 
     // can do speed mode with speedJoint() cmd
 
     try {
             if(position_controller_running_){
-                Servoj(joint_position_command_);
+                writeret_ = Servoj(joint_position_command_);
             }
         } catch (const std::exception &e) {
         }
     
 
 }
+
 bool AuboHardwareInterface::isServoModeStart()
 {
+    printf("[HW] isServoModeStart() - \n");
     return servo_mode_start_;
 }
+
 int AuboHardwareInterface::startServoMode()
 {
+    printf("[HW] startServoMode()- \n");
     if (servo_mode_start_) {
         return 0;
     }
     // 接口调用 : 获取机器人的名字
     auto robot_name = rpc_client_->getRobotNames().front();
+    std::cout<<"[HW] startServoMode() - got robot name: " << robot_name <<std::endl;
+    rpc_client_->getRobotInterface(robot_name)->getMotionControl()->setSpeedFraction(0.3);
 
     //开启servo模式
+    printf("[HW] startServoMode - getRobotInterface\n");
     rpc_client_->getRobotInterface(robot_name)
         ->getMotionControl()
         ->setServoMode(true);
@@ -135,12 +168,14 @@ int AuboHardwareInterface::startServoMode()
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
+    printf("[HW] startServoMode -servo mode is ENABLED\n");
     servo_mode_start_ = true;
     return 0;
 }
 
 int AuboHardwareInterface::stopServoMode()
 {
+    printf("[HW] stopServoMode -\n");
     if (!servo_mode_start_) {
         return 0;
     }
@@ -170,6 +205,7 @@ int AuboHardwareInterface::stopServoMode()
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
+    printf("[HW] stopServoMode - servo mode is DISABLED\n");
     std::cout << "Servoj end" << std::endl;
     servo_mode_start_ = false;
     return 0;
@@ -178,42 +214,52 @@ int AuboHardwareInterface::stopServoMode()
 int AuboHardwareInterface::Servoj(
     const std::array<double, 6> joint_position_command)
 {
+    printf("[HW] ServoJ - \n");
+    int ret;
     // 接口调用 : 获取机器人的名字
     auto robot_name = rpc_client_->getRobotNames().front();
+    std::cout<<"[HW] ServoJ - rgetRobotNames().front()"<<robot_name<<std::endl;
 
+    std::cout<<"[HW] ServoJ :::\n[";
     std::vector<double> traj(6, 0);
     for (size_t i = 0; i < traj.size(); i++) {
         traj[i] = joint_position_command[i];
+        std::cout<<traj[i]<<", ";
     }
+    std::cout<<"]"<<std::endl;
+
     // 接口调用: 关节运动
-    rpc_client_->getRobotInterface(robot_name)
+    printf("[HW] ServoJ - servoJoint(...)\n");
+    ret = rpc_client_->getRobotInterface(robot_name)
         ->getMotionControl()
         ->servoJoint(traj, 0.2, 0.2, 0.005, 0.1, 200);
-    std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    // std::this_thread::sleep_for(std::chrono::milliseconds(25));
 
     //    std::cout << "servoJoint finish!" << std::endl;
 
-    return 0;
+    return ret;
 }
 
 bool AuboHardwareInterface::prepareSwitch(
     const std::list<hardware_interface::ControllerInfo> &start_list,
     const std::list<hardware_interface::ControllerInfo> &stop_list)
 {
+    printf("[HW] prepareSwitch() - \n");
     bool ret_val = true;
-    if (controllers_initialized_ && !isRobotProgramRunning() &&
-        !start_list.empty()) {
-        for (auto &controller : start_list) {
-            if (!controller.claimed_resources.empty()) {
-                ROS_ERROR_STREAM(
-                    "Robot control is currently inactive. Starting controllers "
-                    "that claim resources is currently "
-                    "not possible. Not starting controller '"
-                    << controller.name << "'");
-                ret_val = false;
-            }
-        }
-    }
+    // block below prevents controller switching after first pass. I dont know why it would do that.
+    // if (controllers_initialized_ && !isRobotProgramRunning() &&
+    //     !start_list.empty()) {
+    //     for (auto &controller : start_list) {
+    //         if (!controller.claimed_resources.empty()) {
+    //             ROS_ERROR_STREAM(
+    //                 "Robot control is currently inactive. Starting controllers "
+    //                 "that claim resources is currently "
+    //                 "not possible. Not starting controller '"
+    //                 << controller.name << "'");
+    //             ret_val = false;
+    //         }
+    //     }
+    // }
 
     controllers_initialized_ = true;
     return ret_val;
@@ -223,6 +269,7 @@ void AuboHardwareInterface::doSwitch(
     const std::list<hardware_interface::ControllerInfo> &start_list,
     const std::list<hardware_interface::ControllerInfo> &stop_list)
 {
+    printf("[HW] doSwitich -\n");
     for (auto &controller_it : stop_list) {
         for (auto &resource_it : controller_it.claimed_resources) {
             if (checkControllerClaims(resource_it.resources)) {
@@ -319,6 +366,7 @@ void AuboHardwareInterface::doSwitch(
 
 void AuboHardwareInterface::readActualQ()
 {
+    printf("[HW] readActualQ -\n");
     // 使用 actual_q_copy_
     // 固定该时间戳下read到的位姿，否则读取到的关节状态不稳定
     // actual_q_copy_必须用 array 否则会 bad_alloc
@@ -335,6 +383,7 @@ void AuboHardwareInterface::readActualQ()
 
 bool AuboHardwareInterface::isRobotProgramRunning() const
 {
+    printf("[HW] isRobotProgramRunning -\n");
     return robot_program_running_;
 }
 

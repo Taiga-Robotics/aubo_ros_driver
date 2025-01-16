@@ -89,6 +89,7 @@ public:
      */
     virtual void write(const ros::Time &time,
                        const ros::Duration &period) override;
+    int writeret_=0;
     /*!
      * \brief Preparation to start and stop loaded controllers.
      *
