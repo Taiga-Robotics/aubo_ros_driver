@@ -22,7 +22,8 @@ set(ENV{CPM_SOURCE_CACHE} $ENV{HOME}/.cache/CPM)
             # URL "https://download.aubo-robotics.cn/sdk/aubo_sdk-0.22.1-Linux_x86_64+2ed0c14.zip"
             # URL "https://s3.ca-central-1.wasabisys.com/synapse--public/aubo_sdk-0.22.1-Linux_x86_64+2ed0c14.zip"
             # URL "/home/sparkie/Downloads/aubo_sdk-0.24.0-Linux_x86_64+96a45ac.zip"
-          URL "https://download.aubo-robotics.cn/sdk/aubo_sdk-0.22.4-Linux_x86_64+17501f8.zip"
+            # URL "https://download.aubo-robotics.cn/sdk/aubo_sdk-0.22.4-Linux_x86_64+17501f8.zip"
+            URL "https://s3.ca-central-1.wasabisys.com/synapse-random/aubo_sdk-0.22.4-Linux_x86_64+17501f8.zip"
         )
         FetchContent_Populate(aubo_sdk)
     endif()
