@@ -25,6 +25,7 @@ add_service_files(
    SetIO.srv
    SetPayload.srv
    SetSpeedSliderFraction.srv
+   SelectSafetyProfile.srv
 )
 
 

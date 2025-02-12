@@ -5,6 +5,8 @@ project(aubo_robot_driver)
 
 add_definitions( -DROS_BUILD )
 
+set(CMAKE_BUILD_TYPE Release) # force release build to suppress cmake warnings.
+
 if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
   message("${PROJECT_NAME}: You did not request a specific build type: selecting 'RelWithDebInfo'.")
   set(CMAKE_BUILD_TYPE RelWithDebInfo)
@@ -28,7 +30,7 @@ set(ENV{CPM_SOURCE_CACHE} $ENV{HOME}/.cache/CPM)
         FetchContent_Populate(aubo_sdk)
     endif()
     set(aubo_sdk_DIR ${aubo_sdk_SOURCE_DIR}/lib/cmake/aubo_sdk)
-message("aubo_sdk_DIR" ${aubo_sdk_SOURCE_DIR}/lib/cmake/aubo_sdk)
+# message("aubo_sdk_DIR" ${aubo_sdk_SOURCE_DIR}/lib/cmake/aubo_sdk)
 # 下载 aubo_sdk 发布包(源码方式引入)
 #CPMAddPackage(
 #          NAME aubo_sdk
@@ -37,7 +39,7 @@ message("aubo_sdk_DIR" ${aubo_sdk_SOURCE_DIR}/lib/cmake/aubo_sdk)
 #        )
 
 
-message("aubo_sdk_SOURCE_DIR ${aubo_sdk_SOURCE_DIR}")
+# message("aubo_sdk_SOURCE_DIR ${aubo_sdk_SOURCE_DIR}")
 
 find_package(aubo_sdk REQUIRED)
 find_package(catkin REQUIRED
