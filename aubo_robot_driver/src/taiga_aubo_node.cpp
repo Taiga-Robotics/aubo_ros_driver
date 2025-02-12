@@ -976,8 +976,15 @@ class AuboController : public IROSHardware
 
             safety_config_space_ = req.profile_name;
 
+            // might have to poweroff, might have to simply select disabled mode?
+            //robot_interface_->getRobotManage()->setOperationalMode(OperationalModeType::Disabled)
+            
             //call set safety
             res.success=set_safety(safety_config_space_);
+
+            //and then reenable all the shit i broke to set it.
+            // robot_interface_->getRobotManage()->setOperationalMode(OperationalModeType::Automatic)
+            
             res.message="Loaded safety profile from " + safety_config_space_;
             ROS_INFO("[AUBO HW] %s", res.message.c_str());
             return(true);
