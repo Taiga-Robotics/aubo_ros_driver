@@ -93,6 +93,8 @@ class AuboController : public IROSHardware
     ros::ServiceServer select_safety_profile_svc;
     ros::ServiceServer power_off_svc_;
     ros::ServiceServer power_on_svc_;
+    ros::ServiceServer disable_mode_svc_;
+    ros::ServiceServer auto_mode_svc_;
     ros::ServiceServer get_safety_checksum_svc_;
     ros::ServiceServer set_tcp_offset_svc_;
 
@@ -628,6 +630,8 @@ class AuboController : public IROSHardware
             
             power_off_svc_ = node_handle.advertiseService("power_off", &AuboController::poweroff_cb, this);
             power_on_svc_ = node_handle.advertiseService("power_on", &AuboController::poweron_cb, this);
+            disable_mode_svc_ = node_handle.advertiseService("mode_disabled", &AuboController::disable_mode_cb, this);
+            auto_mode_svc_ = node_handle.advertiseService("mode_automatic", &AuboController::auto_mode_cb, this);
             
             set_tcp_offset_svc_ = node_handle.advertiseService("set_tcp_offset", &AuboController::set_tcp_offset_cb, this);
         }
@@ -954,40 +958,37 @@ class AuboController : public IROSHardware
         }
 
 
-        bool confirm_safety_params_cb(std_srvs::TriggerRequest &req, std_srvs::TriggerResponse &res)
+        bool disable_mode_cb(std_srvs::TriggerRequest &req, std_srvs::TriggerResponse &res)
         {
-            //call set safety
-            res.success=set_safety(safety_config_space_);
-            res.message="Confirmed safety profile from " + safety_config_space_;
-            ROS_INFO("[AUBO HW] %s", res.message.c_str());
-            return(true);
+            res.success = false;
+            auto oret = robot_interface_->getRobotManage()->setOperationalMode(OperationalModeType::Disabled);
+            if (oret == 0)
+            {
+                res.success = true;
+            }
+            {
+                res.message += "::failed to change op mode to disabled";
+                ros_error(res.message);
+            }
+
+            return(res.success);
         }
 
 
-        bool select_safety_profile_cb(aubo_msgs::SelectSafetyProfileRequest &req, aubo_msgs::SelectSafetyProfileResponse &res)
+        bool auto_mode_cb(std_srvs::TriggerRequest &req, std_srvs::TriggerResponse &res)
         {
-            res.success=false;
-            if(req.profile_name=="")
+            res.success = false;
+            auto oret = robot_interface_->getRobotManage()->setOperationalMode(OperationalModeType::Automatic);
+            if (oret == 0)
             {
-                res.message = "Safety profile was NULLSTR, this is not permitted.";
+                res.success = true;
+            }
+            {
+                res.message += "::failed to change op mode to automatic";
                 ros_error(res.message);
-                return(true);
             }
 
-            safety_config_space_ = req.profile_name;
-
-            // might have to poweroff, might have to simply select disabled mode?
-            //robot_interface_->getRobotManage()->setOperationalMode(OperationalModeType::Disabled)
-            
-            //call set safety
-            res.success=set_safety(safety_config_space_);
-
-            //and then reenable all the shit i broke to set it.
-            // robot_interface_->getRobotManage()->setOperationalMode(OperationalModeType::Automatic)
-            
-            res.message="Loaded safety profile from " + safety_config_space_;
-            ROS_INFO("[AUBO HW] %s", res.message.c_str());
-            return(true);
+            return(res.success);
         }
 
 
@@ -1027,13 +1028,6 @@ class AuboController : public IROSHardware
         }
 
 
-        bool get_safety_checksum_cb(std_srvs::TriggerRequest &req, std_srvs::TriggerResponse &res)
-        {
-            res.success = get_safety_checksum();
-            return(true);
-        }
-
-
         bool set_tcp_offset_cb(std_srvs::TriggerRequest &req, std_srvs::TriggerResponse &res)
         {
             res.success = false;
@@ -1050,6 +1044,50 @@ class AuboController : public IROSHardware
             }
 
             return(res.success);
+        }
+
+
+        bool confirm_safety_params_cb(std_srvs::TriggerRequest &req, std_srvs::TriggerResponse &res)
+        {
+            //call set safety
+            res.success=set_safety(safety_config_space_);
+            res.message="Confirmed safety profile from " + safety_config_space_;
+            ROS_INFO("[AUBO HW] %s", res.message.c_str());
+            return(true);
+        }
+
+
+        bool select_safety_profile_cb(aubo_msgs::SelectSafetyProfileRequest &req, aubo_msgs::SelectSafetyProfileResponse &res)
+        {
+            res.success=false;
+            if(req.profile_name=="")
+            {
+                res.message = "Safety profile was NULLSTR, this is not permitted.";
+                ros_error(res.message);
+                return(true);
+            }
+
+            safety_config_space_ = req.profile_name;
+
+            // might have to poweroff, might have to simply select disabled mode?
+            //robot_interface_->getRobotManage()->setOperationalMode(OperationalModeType::Disabled)
+            
+            //call set safety
+            res.success=set_safety(safety_config_space_);
+
+            //and then reenable all the shit i broke to set it.
+            // robot_interface_->getRobotManage()->setOperationalMode(OperationalModeType::Automatic)
+
+            res.message="Loaded safety profile from " + safety_config_space_;
+            ROS_INFO("[AUBO HW] %s", res.message.c_str());
+            return(true);
+        }
+
+
+        bool get_safety_checksum_cb(std_srvs::TriggerRequest &req, std_srvs::TriggerResponse &res)
+        {
+            res.success = get_safety_checksum();
+            return(true);
         }
 
 
