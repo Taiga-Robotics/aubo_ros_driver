@@ -1,0 +1,6 @@
+# tell the driver where to look for a safety profile, and then loads that safety profile. 
+# default is "<aubonamespace>/safety_config"
+string profile_name
+---
+string message
+bool success
