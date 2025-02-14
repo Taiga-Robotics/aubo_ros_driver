@@ -622,11 +622,11 @@ class AuboController : public IROSHardware
             clear_protective_stop_svc_ = node_handle.advertiseService("clear_protective_stop", &AuboController::clear_protective_stop_cb, this);
             servomode_on_svc_ = node_handle.advertiseService("servomode_on", &AuboController::servomode_on_cb, this);
             servomode_off_svc_ = node_handle.advertiseService("servomode_off", &AuboController::servomode_off_cb, this);
-            get_servomode_svc = node_handle.advertiseService("get_servomode", &AuboController::select_safety_profile_cb, this);
+            get_servomode_svc = node_handle.advertiseService("get_servomode", &AuboController::get_servomode_cb, this);
             
             confirm_safety_params_svc = node_handle.advertiseService("confirm_safety_params", &AuboController::confirm_safety_params_cb, this);
             get_safety_checksum_svc_ = node_handle.advertiseService("get_safety_checksum", &AuboController::get_safety_checksum_cb, this);
-            select_safety_profile_svc = node_handle.advertiseService("select_safety_profile", &AuboController::confirm_safety_params_cb, this);
+            select_safety_profile_svc = node_handle.advertiseService("select_safety_profile", &AuboController::select_safety_profile_cb, this);
             
             power_off_svc_ = node_handle.advertiseService("power_off", &AuboController::poweroff_cb, this);
             power_on_svc_ = node_handle.advertiseService("power_on", &AuboController::poweron_cb, this);
