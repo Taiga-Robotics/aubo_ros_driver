@@ -29,7 +29,7 @@ class AuboController : public IROSHardware
     double servoj_arrival_samples_=2.0;
     double velmode_horizon_samples_=2.0;
     uint32_t safetyparamschecksum_=0;
-    bool estopped_, hangduide_active_;
+    bool estopped_=false, hangduide_active_=false, auto_active_=false;
     unsigned long activates_=0;
     JointCmdMode last_robot_cmd_mode_ = MD_NONE, robot_cmd_mode_ = MD_NONE; // also used to determine whether to be in servoj mode or not
     
@@ -42,6 +42,7 @@ class AuboController : public IROSHardware
     //safety
     std::string safety_config_space_ = "safety_config";
     RobotSafetyParameterRange safetyparams;
+    bool startup_go_op_=true;      //whether the robot should automatically try to become operational on driver start
 
     // RTDE subscriber data:
     std::mutex rtde_mtx_;
@@ -60,11 +61,15 @@ class AuboController : public IROSHardware
     std::vector<double> target_qdd_{ std::vector<double>(6, 0) };
     int line_{ -1 };
     bool rtde_data_valid_=false;
+    arcs::common_interface::RobotMsgVector robot_messages_;
+    int safety_status_bits_;
+
 
     // RTDE IO data
     std::mutex rtde_input_mtx_;
     uint64_t IO_inputs_;
     uint64_t TOOL_IO_inputs_;
+    uint64_t config_dout_bits_;
     bool rtde_input_data_valid_=false;
 
     // ROS Publishers, Services and subscribers
@@ -82,6 +87,7 @@ class AuboController : public IROSHardware
     ros::ServiceServer go_op_svc_;
     ros::ServiceServer handguide_svc_;
     ros::ServiceServer set_load_svc_;
+    ros::ServiceServer get_load_svc_;
     ros::ServiceServer set_IO_output_svc_;
     ros::ServiceServer set_tool_IO_output_svc_;
     ros::ServiceServer set_tool_IO_mode_svc_;
@@ -132,6 +138,12 @@ class AuboController : public IROSHardware
             }
             robot_ip_=robot_ip;
 
+            bool startup_go_op=true;
+            if(!node_handle.getParam("startup_go_op", startup_go_op))
+            {
+                ROS_WARN("startup_go_op not specified in driver namespace %s, defaults value is TRUE. The robot will try to automatically go operational shortly.", node_handle.getNamespace().c_str());
+            }
+            startup_go_op_ = startup_go_op;
 
             double sj_arrival_samples=2.0;
             if(!node_handle.getParam("servoj_arrival_samples", sj_arrival_samples)) 
@@ -341,16 +353,16 @@ class AuboController : public IROSHardware
                     target_qd_ = parser.popVectorDouble();
                     target_qdd_ = parser.popVectorDouble();
                     rtde_data_valid_=true;
-                    // process estop bool immediately
+                    // process autoactive bool immediately
                     if(((safety_mode_ == SafetyModeType::Normal) || (safety_mode_ == SafetyModeType::ReducedMode)) && (robot_mode_ == RobotModeType::Running))  
-                        estopped_ = false;
+                        auto_active_ = false;
                     else
-                        estopped_ = true;
+                        auto_active_ = true;
 
                 });
 
             // subscribe to an RTDE stream for IO data @ 20Hz
-            topic1 = rtde_client_->setTopic(false, { "R1_standard_digital_input_bits", "R1_tool_digital_input_bits" }, 20, 1);
+            topic1 = rtde_client_->setTopic(false, { "R1_standard_digital_input_bits", "R1_tool_digital_input_bits", "R1_configurable_digital_output_bits"}, 20, 1);
 
             rtde_client_->subscribe(topic1, [this](InputParser &parser) 
                 {
@@ -358,6 +370,12 @@ class AuboController : public IROSHardware
                     std::unique_lock<std::mutex> lck(rtde_input_mtx_);
                     IO_inputs_ = parser.popInt64();
                     TOOL_IO_inputs_ = parser.popInt64();
+                    config_dout_bits_ = parser.popInt64();
+                    // NEW ESTOP IMMEDIATE:
+                    estopped_ = (config_dout_bits_&0x01UL) == 0x01UL;
+                    // safety_status_bits_ = parser.popInt16();  //, "R1_safety_status_bits" type is null exception
+
+                    // robot_messages_ = parser.popRobotMsgVector(); // , "R1_message" type is null exception
                     rtde_input_data_valid_=true;
                 });
 
@@ -616,6 +634,7 @@ class AuboController : public IROSHardware
             go_op_svc_ = node_handle.advertiseService("go_operational", &AuboController::go_op_svc_cb, this);
             handguide_svc_ = node_handle.advertiseService("handguide", &AuboController::handguide_svc_cb, this);
             set_load_svc_ = node_handle.advertiseService("set_load", &AuboController::set_load_cb, this);
+            get_load_svc_ = node_handle.advertiseService("get_load", &AuboController::get_load_cb, this);
             set_IO_output_svc_ = node_handle.advertiseService("set_io_output", &AuboController::set_io_output_cb, this);
             set_tool_IO_output_svc_ = node_handle.advertiseService("set_tool_io_output", &AuboController::set_tool_io_output_cb, this);
             set_tool_IO_mode_svc_ = node_handle.advertiseService("set_tool_io_mode", &AuboController::set_tool_io_mode_cb, this);
@@ -696,12 +715,34 @@ class AuboController : public IROSHardware
             }
             robot_control_mode_pub_->unlockAndPublish();
 
+            // for(auto msg: robot_messages_)
+            // {
+            //     ROS_WARN("[AUBO HW] got robot msg level: %d, code: %d, source: %s ", msg.level, msg.code, msg.source.c_str());
+            //     for(auto arg: msg.args)
+            //     {
+            //         ROS_WARN("[AUBO HW] robot msg comes with arg: %s", arg.c_str());
+            //     }
+            // }
+
+            // ROS_WARN("[AUBO HW] safety status bits: %04X", safety_status_bits_);
+            // ROS_WARN("[AUBO HW] cdout status bits: %016lX", config_dout_bits_);
+
         }
 
 
         bool go_op_svc_cb(std_srvs::TriggerRequest &req, std_srvs::TriggerResponse &res)
         {
             res.success=false;
+            std::string msg;
+            
+            //early exit if we're still estopped
+            if (is_estopped())
+            {
+                msg += "::robot is estopped. skipping go_op procedure.";
+                ROS_WARN_THROTTLE(10.0, "%s", msg.c_str()); //throttle this, it's meant to allow banging on the service when we're estopped without bombarding the robot with poweron requests -- don't flood the console
+                res.message = msg;
+                return(true);
+            }
             
             RobotModeType robot_mode = robot_interface_->getRobotState()->getRobotModeType();
             
@@ -711,7 +752,6 @@ class AuboController : public IROSHardware
             ROS_WARN("[AUBO HW] control mode: %d, operational mode %d.", (int) robot_control_mode, (int) robot_operational_mode);
 
             bool in_zerog = (robot_control_mode == RobotControlModeType::Freedrive) || (robot_control_mode == RobotControlModeType::Force);
-            std::string msg;
             if (in_zerog)
             {
                 msg += "::robot is in zerog mode [" + std::to_string((int)robot_control_mode) + "]. Disabling first";
@@ -751,6 +791,7 @@ class AuboController : public IROSHardware
                 // Interface call: The robot arm initiates a power-on request
                 // can except, not sure if thatll fail the service or take down the driver
                 auto pret = robot_interface_->getRobotManage()->poweron();
+
                 if (pret == AUBO_BAD_STATE) //TODO: not equal to 0 i think
                 {
                     msg += "::failed to poweron";
@@ -775,7 +816,14 @@ class AuboController : public IROSHardware
                 robot_interface_->getRobotManage()->startup();
 
                 // Wait for the robot arm to enter running mode
-                waitForRobotMode(RobotModeType::Running);
+                if (!waitForRobotMode(RobotModeType::Running))
+                {
+                    msg += "::Robot did not enter running mode";
+                    ros_error(msg);
+                    res.message = msg;
+                    res.success = false;
+                    return(true);
+                }
 
                 robot_mode = (int) robot_interface_->getRobotState()->getRobotModeType();
                 msg += "::The robot arm released the brake successfully, current mode: " + std::to_string(robot_mode);
@@ -859,7 +907,34 @@ class AuboController : public IROSHardware
                 ros_error("Could not set payload. Error Code: " + std::to_string(setload_ret));
                 res.success = false;
             }
+            std_srvs::TriggerRequest req_payload_conf;
+            std_srvs::TriggerResponse res_payload_conf;
+            get_load_cb(req_payload_conf, res_payload_conf);
             
+            return(true);
+        }
+
+        //TODO: make this better if we need it, otherwise get rid of it (we learned from this that the api wants it's CoM in meters)
+        //NOTE: make it better by using an irisjson and dumping that info into the json string -- even better: include additional fields to specify units
+        bool get_load_cb(std_srvs::TriggerRequest &req, std_srvs::TriggerResponse &res)
+        {
+            Payload current_payload;
+            current_payload = robot_interface_->getRobotConfig()->getPayload();
+            double mass = std::get<0>(current_payload);
+            std::vector<double> cog = std::get<1>(current_payload);
+            std::vector<double> aom = std::get<2>(current_payload);
+            std::vector<double> inertia = std::get<3>(current_payload);
+            ROS_WARN_STREAM("Current Payload: ");
+            ROS_WARN_STREAM("Mass: "<< mass);
+            ROS_WARN_STREAM("CoG: " << cog[0] << ", " << cog[1] << ", " << cog[2]);
+            ROS_WARN_STREAM("AoM: " << aom[0] << ", " << aom[1] << ", " << aom[2]);
+            ROS_WARN_STREAM("Inertia: ");
+            for (auto i:inertia)
+            {
+                ROS_WARN_STREAM(i);
+            }
+            res.success = true;
+            res.message = "Current Payload logged";
             return(true);
         }
 
@@ -1067,16 +1142,25 @@ class AuboController : public IROSHardware
                 return(true);
             }
 
-            safety_config_space_ = req.profile_name;
-
             // might have to poweroff, might have to simply select disabled mode?
             //robot_interface_->getRobotManage()->setOperationalMode(OperationalModeType::Disabled)
+            auto pret = robot_interface_->getRobotManage()->poweroff();
+            if (pret!=0)
+            {
+                res.message = "Select safety failed to poweroff the robot.";
+                ros_error(res.message);
+                return(true);
+            }
+
             
             //call set safety
-            res.success=set_safety(safety_config_space_);
+            res.success=set_safety(req.profile_name);
+            if(res.success)
+                safety_config_space_ = req.profile_name;
 
             //and then reenable all the shit i broke to set it.
             // robot_interface_->getRobotManage()->setOperationalMode(OperationalModeType::Automatic)
+            // pret = robot_interface_->getRobotManage()->poweron();
 
             res.message="Loaded safety profile from " + safety_config_space_;
             ROS_INFO("[AUBO HW] %s", res.message.c_str());
@@ -1093,6 +1177,11 @@ class AuboController : public IROSHardware
 
         bool set_safety(std::string config_space)
         {
+            if(!ros::param::has(config_space))
+            {
+                ros_error("Requested safety config " + config_space + " was not found in " + nh_.getNamespace());
+                return(false);
+            }
             //load params into struct - two profiles are defined. safetyparams constructor zeros all elements.
             ros::NodeHandle nhsafe(nh_, config_space);
             nhsafe.getParam("power", safetyparams.params[0].power);
@@ -1202,6 +1291,12 @@ class AuboController : public IROSHardware
             return(estopped_);
         }
 
+
+        bool startup_goop()
+        {
+            return(startup_go_op_);
+        }
+
 };
 
 
@@ -1258,11 +1353,14 @@ int main(int argc, char** argv){
 
     std::cout<<"[AUBO HW] <frequency> " << hw.getControlHz() <<std::endl;
 
-    //ENABLE TORQUE
-    std_srvs::TriggerRequest req;
-    std_srvs::TriggerResponse res;
-    hw.go_op_svc_cb(req, res);
-
+    //OPTIONALLY ENABLE TORQUE
+    if(hw.startup_goop())
+    {
+        std_srvs::TriggerRequest req;
+        std_srvs::TriggerResponse res;
+        hw.go_op_svc_cb(req, res);
+    }
+    
     int ret, read_missed=0;
     last_low_freq_pub_time = ros::Time::now();
     ROS_INFO("[AUBO HW] ENTERING MAIN CONTROL LOOP");
