@@ -896,7 +896,7 @@ class AuboController : public IROSHardware
             cog = {req.center_of_gravity.x, req.center_of_gravity.y, req.center_of_gravity.z};
             mass = req.mass;
             int setload_ret;
-            setload_ret = robot_interface_->getRobotConfig()->setPayload(mass, cog, aom, inertia);    //TODO: check ret
+            setload_ret = robot_interface_->getRobotConfig()->setPayload(mass, cog, aom, inertia);
             if (setload_ret==0)
             {
                 res.success = true;
@@ -975,13 +975,25 @@ class AuboController : public IROSHardware
 
         bool clear_protective_stop_cb(std_srvs::TriggerRequest &req, std_srvs::TriggerResponse &res)
         {
-            if(0!=robot_interface_->getRobotManage()->setUnlockProtectiveStop())
+            if (safety_mode_ == SafetyModeType::ProtectiveStop)
             {
-                res.success = false;
-            }else
+                int ret = robot_interface_->getRobotManage()->setUnlockProtectiveStop();
+                res.message = "[AUBO HW] [clear_protective_stop_cb] setUnlockProtectiveStop() returned: " + std::to_string(ret);
+                ROS_INFO("%s",res.message.c_str());
+                if(0!=ret)
+                {
+                    res.success = false;
+                }else
+                {
+                    res.success = true;
+                }
+            }
+            else
             {
+                res.message = "[AUBO HW] [clear_protective_stop_cb] Robot was not in protective stop. Ignoring call to clear_protective_stop";
                 res.success = true;
             }
+            
             
             return(true);
         }
@@ -1242,10 +1254,13 @@ class AuboController : public IROSHardware
             std::string checksum_string;
             nhsafe.getParam("checksum",checksum_string);
             safetyparamschecksum_ = atoi(checksum_string.c_str());
+            uint32_t test_checksum = robot_interface_->getRobotConfig()->calcSafetyParametersCheckSum(safetyparams);
+            ROS_INFO("[AUBO HW] [SDK] Computed checksum: %u", test_checksum);
 
             ROS_INFO("[AUBO HW] loaded checksum string: %s, converted to int: %u", checksum_string.c_str(), safetyparamschecksum_);
 
             ROS_INFO("[AUBO HW] sending safetyparams with local checksum %u", safetyparamschecksum_);
+            
 
             //send the params
             int setres = robot_interface_->getRobotConfig()->confirmSafetyParameters(safetyparams);
