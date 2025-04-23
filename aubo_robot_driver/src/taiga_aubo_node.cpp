@@ -70,6 +70,7 @@ class AuboController : public IROSHardware
     uint64_t IO_inputs_;
     uint64_t TOOL_IO_inputs_;
     uint64_t config_dout_bits_;
+    uint64_t IO_outputs_;
     bool rtde_input_data_valid_=false;
 
     // ROS Publishers, Services and subscribers
@@ -83,6 +84,7 @@ class AuboController : public IROSHardware
     std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Int64> > safety_mode_pub_;
     std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Int64> > runtime_state_pub_;
     std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::UInt64> > IO_inputs_pub_;
+    std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::UInt64> > IO_outputs_pub_;
     std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::UInt64> > TOOL_IO_inputs_pub_;
     ros::ServiceServer go_op_svc_;
     ros::ServiceServer handguide_svc_;
@@ -228,12 +230,13 @@ class AuboController : public IROSHardware
         */
         int write(ros::Duration &dt){
             int ret=0;
+            double lookahead = 0.3;
             if(estopped_) return(0);
 
             if(robot_cmd_mode_==MD_POSITION){
                 enforceLimit(dt); // will work with pos/vel/effort, depending on configuration
                 double target_time = servoj_arrival_samples_/control_hz_;
-                ret=robot_interface_->getMotionControl()->servoJoint(joint_pos_cmd_, 31.3999, 3.13999, target_time, 0.050123, 200.00);
+                ret=robot_interface_->getMotionControl()->servoJoint(joint_pos_cmd_, 0.2, 0.2, target_time, lookahead, 200.00);
                 num_writes_++;
 
                 //publish the cmd that we received at full loop rate for now.
@@ -252,7 +255,7 @@ class AuboController : public IROSHardware
                     joint_pos_cmd_[jid] = joint_pos_[jid] + joint_vel_cmd_[jid] * horizon_time;
                 }
                 
-                ret=robot_interface_->getMotionControl()->servoJoint(joint_pos_cmd_, 31.4, 3.14, target_time, 0.050123, 200.00);
+                ret=robot_interface_->getMotionControl()->servoJoint(joint_pos_cmd_, 0.2, 0.2, target_time, lookahead, 200.00);
                 num_writes_++;
 
                 //publish the cmd that we received at full loop rate for now.
@@ -272,7 +275,7 @@ class AuboController : public IROSHardware
                 }
                 ros::Duration limit_dt = dt + ros::Duration(horizon_time);
                 enforceLimit(limit_dt); // will work with pos/vel/effort, depending on configuration
-                ret=robot_interface_->getMotionControl()->servoJoint(joint_pos_cmd_, 31.4, 3.14, target_time, 0.050123, 200.00);
+                ret=robot_interface_->getMotionControl()->servoJoint(joint_pos_cmd_, 0.2, 0.2, target_time, lookahead, 200.00);
 
                 //publish the cmd that we received at full loop rate for now.
                 if (cmd_out_pub_->trylock()){
@@ -362,7 +365,7 @@ class AuboController : public IROSHardware
                 });
 
             // subscribe to an RTDE stream for IO data @ 20Hz
-            topic1 = rtde_client_->setTopic(false, { "R1_standard_digital_input_bits", "R1_tool_digital_input_bits", "R1_configurable_digital_output_bits"}, 20, 1);
+            topic1 = rtde_client_->setTopic(false, { "R1_standard_digital_input_bits", "R1_tool_digital_input_bits", "R1_configurable_digital_output_bits", "R1_standard_digital_output_bits"}, 20, 1);
 
             rtde_client_->subscribe(topic1, [this](InputParser &parser) 
                 {
@@ -371,6 +374,7 @@ class AuboController : public IROSHardware
                     IO_inputs_ = parser.popInt64();
                     TOOL_IO_inputs_ = parser.popInt64();
                     config_dout_bits_ = parser.popInt64();
+                    IO_outputs_ = parser.popInt64();
                     // NEW ESTOP IMMEDIATE:
                     estopped_ = (config_dout_bits_&0x01UL) == 0x01UL;
                     // safety_status_bits_ = parser.popInt16();  //, "R1_safety_status_bits" type is null exception
@@ -624,6 +628,9 @@ class AuboController : public IROSHardware
             IO_inputs_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::UInt64>(node_handle, "io_inputs", 1));
             IO_inputs_pub_->msg_.data=0;
 
+            IO_outputs_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::UInt64>(node_handle, "io_outputs", 1));
+            IO_outputs_pub_->msg_.data=0;
+
             TOOL_IO_inputs_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::UInt64>(node_handle, "tool_io_inputs", 1));
             TOOL_IO_inputs_pub_->msg_.data=0;
 
@@ -688,11 +695,18 @@ class AuboController : public IROSHardware
             {
                 //scope for rtde input republisher
                 std::unique_lock<std::mutex> lck(rtde_input_mtx_);
+
                 if (IO_inputs_pub_->trylock())
                 {
                     IO_inputs_pub_->msg_.data = (int64_t)IO_inputs_;
                 }
                 IO_inputs_pub_->unlockAndPublish();
+
+                if (IO_outputs_pub_->trylock())
+                {
+                    IO_outputs_pub_->msg_.data = (int64_t)IO_outputs_;
+                }
+                IO_outputs_pub_->unlockAndPublish();
 
                 if (TOOL_IO_inputs_pub_->trylock())
                 {
@@ -709,11 +723,12 @@ class AuboController : public IROSHardware
             }
             estop_pub_->unlockAndPublish();
 
-            if (robot_control_mode_pub_->trylock())
-            {
-                robot_control_mode_pub_->msg_.data = (int64_t)robot_interface_->getRobotManage()->getRobotControlMode();
-            }
-            robot_control_mode_pub_->unlockAndPublish();
+            //  disabled because its spamming the robot logs with getcontrolmode requests
+            // if (robot_control_mode_pub_->trylock())
+            // {
+            //     robot_control_mode_pub_->msg_.data = (int64_t)robot_interface_->getRobotManage()->getRobotControlMode();
+            // }
+            // robot_control_mode_pub_->unlockAndPublish();
 
             // for(auto msg: robot_messages_)
             // {
