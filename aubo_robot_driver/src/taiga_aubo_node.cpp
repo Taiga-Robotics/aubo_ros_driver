@@ -71,6 +71,7 @@ class AuboController : public IROSHardware
     uint64_t TOOL_IO_inputs_;
     uint64_t config_dout_bits_;
     uint64_t IO_outputs_;
+    std::vector<double> tool_analog_inputs_;
     bool rtde_input_data_valid_=false;
 
     // ROS Publishers, Services and subscribers
@@ -85,6 +86,7 @@ class AuboController : public IROSHardware
     std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Int64> > runtime_state_pub_;
     std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::UInt64> > IO_inputs_pub_;
     std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::UInt64> > IO_outputs_pub_;
+    std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray> > tool_analog_pub_;
     std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::UInt64> > TOOL_IO_inputs_pub_;
     ros::ServiceServer go_op_svc_;
     ros::ServiceServer handguide_svc_;
@@ -365,7 +367,7 @@ class AuboController : public IROSHardware
                 });
 
             // subscribe to an RTDE stream for IO data @ 20Hz
-            topic1 = rtde_client_->setTopic(false, { "R1_standard_digital_input_bits", "R1_tool_digital_input_bits", "R1_configurable_digital_output_bits", "R1_standard_digital_output_bits"}, 20, 1);
+            topic1 = rtde_client_->setTopic(false, { "R1_standard_digital_input_bits", "R1_tool_digital_input_bits", "R1_configurable_digital_output_bits", "R1_standard_digital_output_bits", "R1_tool_analog_input_values"}, 20, 1);
 
             rtde_client_->subscribe(topic1, [this](InputParser &parser) 
                 {
@@ -375,6 +377,7 @@ class AuboController : public IROSHardware
                     TOOL_IO_inputs_ = parser.popInt64();
                     config_dout_bits_ = parser.popInt64();
                     IO_outputs_ = parser.popInt64();
+                    tool_analog_inputs_ = parser.popVectorDouble();
                     // NEW ESTOP IMMEDIATE:
                     estopped_ = (config_dout_bits_&0x01UL) == 0x01UL;
                     // safety_status_bits_ = parser.popInt16();  //, "R1_safety_status_bits" type is null exception
@@ -631,6 +634,9 @@ class AuboController : public IROSHardware
             IO_outputs_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::UInt64>(node_handle, "io_outputs", 1));
             IO_outputs_pub_->msg_.data=0;
 
+            tool_analog_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray>(node_handle, "tool_analog_inputs", 1));
+            tool_analog_pub_->msg_.data={0.0, 0.0};
+
             TOOL_IO_inputs_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::UInt64>(node_handle, "tool_io_inputs", 1));
             TOOL_IO_inputs_pub_->msg_.data=0;
 
@@ -707,6 +713,12 @@ class AuboController : public IROSHardware
                     IO_outputs_pub_->msg_.data = (int64_t)IO_outputs_;
                 }
                 IO_outputs_pub_->unlockAndPublish();
+
+                if (tool_analog_pub_->trylock())
+                {
+                    tool_analog_pub_->msg_.data = tool_analog_inputs_;
+                }
+                tool_analog_pub_->unlockAndPublish();
 
                 if (TOOL_IO_inputs_pub_->trylock())
                 {
