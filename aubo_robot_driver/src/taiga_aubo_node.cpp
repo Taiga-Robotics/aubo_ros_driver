@@ -72,6 +72,7 @@ class AuboController : public IROSHardware
     uint64_t config_dout_bits_;
     uint64_t IO_outputs_;
     std::vector<double> tool_analog_inputs_;
+    std::vector<double> analog_inputs_;
     bool rtde_input_data_valid_=false;
 
     // ROS Publishers, Services and subscribers
@@ -87,6 +88,7 @@ class AuboController : public IROSHardware
     std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::UInt64> > IO_inputs_pub_;
     std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::UInt64> > IO_outputs_pub_;
     std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray> > tool_analog_pub_;
+    std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray> > analog_pub_;
     std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::UInt64> > TOOL_IO_inputs_pub_;
     ros::ServiceServer go_op_svc_;
     ros::ServiceServer handguide_svc_;
@@ -248,25 +250,6 @@ class AuboController : public IROSHardware
                 cmd_out_pub_->unlockAndPublish();
 
             }
-            else if(robot_cmd_mode_==MD_VELOCITY){
-                enforceLimit(dt); // will work with pos/vel/effort, depending on configuration
-                double target_time = servoj_arrival_samples_/control_hz_;
-                double horizon_time = velmode_horizon_samples_/control_hz_;
-                for(int jid=0; jid<num_joints_; jid++)
-                {
-                    joint_pos_cmd_[jid] = joint_pos_[jid] + joint_vel_cmd_[jid] * horizon_time;
-                }
-                
-                ret=robot_interface_->getMotionControl()->servoJoint(joint_pos_cmd_, 0.2, 0.2, target_time, lookahead, 200.00);
-                num_writes_++;
-
-                //publish the cmd that we received at full loop rate for now.
-                if (cmd_out_pub_->trylock()){
-                    for(int jid=0; jid<num_joints_; jid++) cmd_out_pub_->msg_.data[jid]=joint_pos_cmd_[jid];
-                }
-                cmd_out_pub_->unlockAndPublish();
-
-            }
             else if(robot_cmd_mode_==MD_POSVEL){
                 double target_time = servoj_arrival_samples_/control_hz_;
                 double horizon_time = velmode_horizon_samples_/control_hz_;
@@ -296,6 +279,12 @@ class AuboController : public IROSHardware
                 ROS_WARN_THROTTLE(10, "[AUBO HW] [write] Unsupported Mode %d.", robot_cmd_mode_);
                 ret=-9;
             }
+
+            if(ret!=0 && ret!=3)
+            {
+                robot_cmd_mode_ = MD_NONE;
+            }
+
 
             return ret;
         };
@@ -367,7 +356,9 @@ class AuboController : public IROSHardware
                 });
 
             // subscribe to an RTDE stream for IO data @ 20Hz
-            topic1 = rtde_client_->setTopic(false, { "R1_standard_digital_input_bits", "R1_tool_digital_input_bits", "R1_configurable_digital_output_bits", "R1_standard_digital_output_bits", "R1_tool_analog_input_values"}, 20, 1);
+            topic1 = rtde_client_->setTopic(false, { "R1_standard_digital_input_bits", "R1_tool_digital_input_bits", 
+                "R1_configurable_digital_output_bits", "R1_standard_digital_output_bits", "R1_tool_analog_input_values",
+                 "R1_standard_analog_input_values"}, 20, 1);
 
             rtde_client_->subscribe(topic1, [this](InputParser &parser) 
                 {
@@ -378,10 +369,9 @@ class AuboController : public IROSHardware
                     config_dout_bits_ = parser.popInt64();
                     IO_outputs_ = parser.popInt64();
                     tool_analog_inputs_ = parser.popVectorDouble();
+                    analog_inputs_ = parser.popVectorDouble();
                     // NEW ESTOP IMMEDIATE:
                     estopped_ = (config_dout_bits_&0x01UL) == 0x01UL;
-                    // safety_status_bits_ = parser.popInt16();  //, "R1_safety_status_bits" type is null exception
-
                     // robot_messages_ = parser.popRobotMsgVector(); // , "R1_message" type is null exception
                     rtde_input_data_valid_=true;
                 });
@@ -394,8 +384,6 @@ class AuboController : public IROSHardware
             // set speed, because the example did it too.
             robot_interface_->getMotionControl()->setSpeedFraction(1.0);
         
-            // ---- SERVOJ mode activation is in activate() due to timing concerns. ----
-
             hw_state_ = ST_INACTIVE;
             return 0;
             
@@ -452,7 +440,7 @@ class AuboController : public IROSHardware
             //enter servoj mode
             if (last_robot_cmd_mode_!=robot_cmd_mode_) 
             {
-                if (robot_cmd_mode_==MD_POSITION || robot_cmd_mode_==MD_VELOCITY || robot_cmd_mode_==MD_POSVEL)
+                if (robot_cmd_mode_==MD_POSITION || robot_cmd_mode_==MD_POSVEL)
                 {
                     activate();
                     resetLimit();
@@ -563,6 +551,25 @@ class AuboController : public IROSHardware
         }
 
 
+        bool waitForRobotSafetyMode(SafetyModeType target_mode, double max_time = 20.0)
+        {
+            SafetyModeType current_mode;
+            double wait_time=0.0;
+
+            do {
+                current_mode = robot_interface_->getRobotState()->getSafetyModeType();
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                wait_time+=0.100;
+                if(wait_time>max_time) 
+                {
+                    ROS_WARN("[AUBO HW] Safety mode did not achieve target mode before wait expired.");   //TODO: details
+                    return(false);
+                }
+            } while (current_mode != target_mode);
+            return(true);
+        }
+
+
         bool waitForRobotControlMode(RobotControlModeType target_control_mode, double max_time=1.5)
         {
             RobotControlModeType current_control_mode;
@@ -636,6 +643,9 @@ class AuboController : public IROSHardware
 
             tool_analog_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray>(node_handle, "tool_analog_inputs", 1));
             tool_analog_pub_->msg_.data={0.0, 0.0};
+
+            analog_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray>(node_handle, "analog_inputs", 1));
+            analog_pub_->msg_.data={0.0, 0.0, 0.0, 0.0};
 
             TOOL_IO_inputs_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::UInt64>(node_handle, "tool_io_inputs", 1));
             TOOL_IO_inputs_pub_->msg_.data=0;
@@ -719,6 +729,13 @@ class AuboController : public IROSHardware
                     tool_analog_pub_->msg_.data = tool_analog_inputs_;
                 }
                 tool_analog_pub_->unlockAndPublish();
+
+                if (analog_pub_->trylock())
+                {
+                    analog_pub_->msg_.data = analog_inputs_;
+                }
+                analog_pub_->unlockAndPublish();
+
 
                 if (TOOL_IO_inputs_pub_->trylock())
                 {
@@ -807,19 +824,41 @@ class AuboController : public IROSHardware
             } 
             else 
             {
-                // check if we're powered off, and set the safety params first if we are
-                if ( (robot_mode == RobotModeType::PowerOff) && (!set_safety(safety_config_space_)) ) {
-                    msg += "::failed to set safety parameters";
+                // // check if we're powered off, and set the safety params first if we are
+                // if ( (robot_mode == RobotModeType::PowerOff) && (!set_safety(safety_config_space_)) ) {
+                //     msg += "::failed to set safety parameters";
+                //     ros_error(msg);
+                //     res.message = msg;
+                //     return(true);
+                // }
+
+                // check if the robot is in protective stop, cause im worried about these things.
+                if(SafetyModeType::ProtectiveStop == robot_interface_->getRobotState()->getSafetyModeType())
+                {
+                    int uret = robot_interface_->getRobotManage()->setUnlockProtectiveStop();
+                    if(uret!=0)
+                    {
+                        msg += ":: robot was in protective stop and unlocking protective stop failed.";
+                        ros_error(msg);
+                        res.message = msg;
+                        return(true);
+                    }
+                }
+                
+                // wait for safetymode normal for up to 20 seconds
+                if(!waitForRobotSafetyMode(SafetyModeType::Normal, 20.0))
+                {
+                    msg += "::failed to achieve safetymode normal in allotted 20 second timeout. actual mode:" + std::to_string((int) safety_mode_);
                     ros_error(msg);
                     res.message = msg;
                     return(true);
                 }
-
+                
                 // Interface call: The robot arm initiates a power-on request
                 // can except, not sure if thatll fail the service or take down the driver
                 auto pret = robot_interface_->getRobotManage()->poweron();
 
-                if (pret == AUBO_BAD_STATE) //TODO: not equal to 0 i think
+                if (pret != 0)
                 {
                     msg += "::failed to poweron";
                     ros_error(msg);
@@ -832,7 +871,7 @@ class AuboController : public IROSHardware
                 {
                     msg += "::Failed to transition to idle after poweron command";
                     ros_error(msg);
-
+                    //TODO: fail properly or make this check work first time during regular boots
                 }
 
                 int robot_mode = (int) robot_interface_->getRobotState()->getRobotModeType();
@@ -840,7 +879,13 @@ class AuboController : public IROSHardware
                 ROS_INFO("[AUBO HW] The robotic arm is powered on successfully, current mode: %d", robot_mode);
 
                 // Interface call: The robot arm initiates a brake release request
-                robot_interface_->getRobotManage()->startup();
+                if(0!=robot_interface_->getRobotManage()->startup())
+                {
+                    msg += "::robot startup call failed.";
+                    ros_error(msg);
+                    res.message = msg;
+                    return(true);
+                }
 
                 // Wait for the robot arm to enter running mode
                 if (!waitForRobotMode(RobotModeType::Running))
@@ -858,17 +903,18 @@ class AuboController : public IROSHardware
             }
 
             //check to make sure the safetyparameters on the robot are correct
-            if(!get_safety_checksum())
-            {
-                msg += "::Safety checksum invalid, POWERING OFF THE ROBOT. CALL TAIGA SUPPORT.";
-                ros_error(msg);
-                res.success = false;
-                robot_interface_->getRobotManage()->poweroff();
-            }else
-            {
-                res.success = true;
-            }
-
+            // if(!get_safety_checksum())
+            // {
+            //     msg += "::Safety checksum invalid, POWERING OFF THE ROBOT. CALL TAIGA SUPPORT.";
+            //     ros_error(msg);
+            //     res.success = false;
+            //     robot_interface_->getRobotManage()->poweroff();
+            // }else
+            // {
+            //     res.success = true;
+            // }
+            
+            res.success = true;
             res.message = msg;
             
             return(true);
@@ -881,17 +927,12 @@ class AuboController : public IROSHardware
             res.success = false;
             res.message = "";
             std::string msg;
-            // RobotControlModeType target_mode = RobotControlModeType::Unknown;
-            // if (req.data)
-            // {
-            //     target_mode = RobotControlModeType::Freedrive;
-            // }
             
             int retval = robot_interface_->getRobotManage()->freedrive(req.data);
             if (retval==0) 
             {
                 msg += "::[AUBO HW] call to freedrive() method succeeded";
-                //TODO: figure out why this doesn't work
+                //TODO: figure out why this doesn't work waitformode is a bool, not int
                 // if (0!=waitForRobotControlMode(target_mode))
                 // {
                 //     msg += "::[AUBO HW] Could not read back correct target control mode type sufficiently quickly";
