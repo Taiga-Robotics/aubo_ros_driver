@@ -109,7 +109,7 @@ class AuboController : public IROSHardware
     ros::ServiceServer auto_mode_svc_;
     ros::ServiceServer get_safety_checksum_svc_;
     ros::ServiceServer set_tcp_offset_svc_;
-
+    ros::ServiceServer is_steady_svc_;
 
     public:
         unsigned long num_writes_=0;
@@ -237,6 +237,7 @@ class AuboController : public IROSHardware
             double lookahead = 0.3;
             if(estopped_) return(0);
 
+
             if(robot_cmd_mode_==MD_POSITION){
                 enforceLimit(dt); // will work with pos/vel/effort, depending on configuration
                 double target_time = servoj_arrival_samples_/control_hz_;
@@ -251,6 +252,14 @@ class AuboController : public IROSHardware
 
             }
             else if(robot_cmd_mode_==MD_POSVEL){
+
+                if(!robot_interface_->getMotionControl()->isServoModeEnabled())
+                {
+                    ROS_ERROR("[AUBO HW] Fell out of servomode, DISABLING CONTROL.");
+                    robot_cmd_mode_=MD_NONE;
+                    return(-13);
+                }
+    
                 double target_time = servoj_arrival_samples_/control_hz_;
                 double horizon_time = velmode_horizon_samples_/control_hz_;
                 
@@ -280,8 +289,10 @@ class AuboController : public IROSHardware
                 ret=-9;
             }
 
-            if(ret!=0 && ret!=3)
+            if(ret!=0 && ret!=3 && ret!=2)  // busy and full are permitted.
             {
+                //TODO: logic for queue full (2) return?
+                ROS_ERROR("[AUBO HW] servoj return was not recoverable, got %d. DEACTIVATING CONTROL MODE", ret);
                 robot_cmd_mode_ = MD_NONE;
             }
 
@@ -523,6 +534,11 @@ class AuboController : public IROSHardware
 
 
         int shutdown(){
+            rpc_cli_->logout();
+            rpc_cli_->disconnect();
+            rtde_client_->logout();
+            rtde_client_->disconnect();
+
             hw_state_ = ST_FINAL;
             return 0;};
 
@@ -645,7 +661,7 @@ class AuboController : public IROSHardware
             tool_analog_pub_->msg_.data={0.0, 0.0};
 
             analog_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray>(node_handle, "analog_inputs", 1));
-            analog_pub_->msg_.data={0.0, 0.0, 0.0, 0.0};
+            analog_pub_->msg_.data={0.0, 0.0};
 
             TOOL_IO_inputs_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::UInt64>(node_handle, "tool_io_inputs", 1));
             TOOL_IO_inputs_pub_->msg_.data=0;
@@ -676,6 +692,8 @@ class AuboController : public IROSHardware
             auto_mode_svc_ = node_handle.advertiseService("mode_automatic", &AuboController::auto_mode_cb, this);
             
             set_tcp_offset_svc_ = node_handle.advertiseService("set_tcp_offset", &AuboController::set_tcp_offset_cb, this);
+        
+            is_steady_svc_ = node_handle.advertiseService("is_steady", &AuboController::is_steady_cb, this);
         }
 
 
@@ -844,15 +862,17 @@ class AuboController : public IROSHardware
                         return(true);
                     }
                 }
-                
+
+                ROS_WARN("AUBO HW] pre poweron safety mode is %d", (int)robot_interface_->getRobotState()->getSafetyModeType());
+
                 // wait for safetymode normal for up to 20 seconds
-                if(!waitForRobotSafetyMode(SafetyModeType::Normal, 20.0))
-                {
-                    msg += "::failed to achieve safetymode normal in allotted 20 second timeout. actual mode:" + std::to_string((int) safety_mode_);
-                    ros_error(msg);
-                    res.message = msg;
-                    return(true);
-                }
+                // if(!waitForRobotSafetyMode(SafetyModeType::Normal, 20.0))
+                // {
+                //     msg += "::failed to achieve safetymode normal in allotted 20 second timeout. actual mode:" + std::to_string((int) safety_mode_);
+                //     ros_error(msg);
+                //     res.message = msg;
+                //     return(true);
+                // }
                 
                 // Interface call: The robot arm initiates a power-on request
                 // can except, not sure if thatll fail the service or take down the driver
@@ -867,7 +887,7 @@ class AuboController : public IROSHardware
                 }
 
                 // Wait for the robot arm to enter idle mode
-                if(0!=waitForRobotMode(RobotModeType::Idle))
+                if(!waitForRobotMode(RobotModeType::Idle))
                 {
                     msg += "::Failed to transition to idle after poweron command";
                     ros_error(msg);
@@ -1153,8 +1173,9 @@ class AuboController : public IROSHardware
             auto pret = robot_interface_->getRobotManage()->poweroff();
             if (pret == 0)
             {
+                res.message = "::powered off";
                 res.success = true;
-            }
+            }else
             {
                 res.message += "::failed to poweroff";
                 // ROS_ERROR("%s", res.message.c_str());
@@ -1369,6 +1390,16 @@ class AuboController : public IROSHardware
         }
 
 
+        bool is_steady_cb(std_srvs::TriggerRequest &req, std_srvs::TriggerResponse &res)
+        {
+            bool steady = robot_interface_->getRobotState()->isSteady();
+            ROS_INFO("[AUBO HW] issteady returns truth of %u", steady);
+            res.message = "steady value is " + std::to_string(steady);
+            res.success = steady;
+            return(true);
+        }
+
+
         bool is_estopped()
         {
             return(estopped_);
@@ -1449,7 +1480,9 @@ int main(int argc, char** argv){
     ROS_INFO("[AUBO HW] ENTERING MAIN CONTROL LOOP");
     unsigned long loops=0;
     unsigned long reactivates=0;
+    unsigned long busys=0, fulls=0;
     ros::Time start = ros::Time::now();
+    now = start;
     while(ros::ok()){
         
         last = now;
@@ -1479,8 +1512,15 @@ int main(int argc, char** argv){
         }
         else if (ret==2)
         {
-            ROS_WARN_THROTTLE(10.0, "[AUBO HW] write returns 2, BUFFER FULL.");
+            fulls++;
+            ROS_WARN_THROTTLE(10.0, "[AUBO HW] write returns 2, BUFFER FULL. this has happened %lu times", fulls);
         }
+        else if (ret==3)
+        {
+            busys++;
+            ROS_WARN_THROTTLE(10.0, "[AUBO HW] write returns 3, BUSY. this has happened %lu times", busys);
+        }
+
 
         // maintain robot heartbeat
         hb_msg.data++;
