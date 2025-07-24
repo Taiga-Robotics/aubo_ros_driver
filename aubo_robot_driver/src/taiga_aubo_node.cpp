@@ -62,8 +62,6 @@ class AuboController : public IROSHardware
     int line_{ -1 };
     bool rtde_data_valid_=false;
     arcs::common_interface::RobotMsgVector robot_messages_;
-    int safety_status_bits_;
-
 
     // RTDE IO data
     std::mutex rtde_input_mtx_;
@@ -90,6 +88,7 @@ class AuboController : public IROSHardware
     std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray> > tool_analog_pub_;
     std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray> > analog_pub_;
     std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::UInt64> > TOOL_IO_inputs_pub_;
+    std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::UInt64> > configurable_dout_pub_;
     ros::ServiceServer go_op_svc_;
     ros::ServiceServer handguide_svc_;
     ros::ServiceServer set_load_svc_;
@@ -332,7 +331,12 @@ class AuboController : public IROSHardware
 
             rtde_client_->login("aubo", "123456");
 
-            
+// All tried and failed: 
+// NFG |R1_message|RobotMsg|Robot message from controller|
+// NFG |R1_safety_status|unknown|Safety ststus|
+// NFG |R1_robot_status_bits|unknown|Bits 0-3:          
+// NFG |R1_safety_status_bits|unknown|Bits 0-10: Is normal mode | Is reduced mode | | Is protectivestopped | Is recovery mode | Is safeguard stopped | Is systememergency stopped | Is robot emergency stopped | Is emergencystopped | Is violation | Is fault | Is stopped due to safety|
+
             ROS_INFO("[AUBO HW] Starting RTDE Stream...");
             // subscribe to an RTDE stream for robot position data
             int topic1 = rtde_client_->setTopic(false,
@@ -383,7 +387,7 @@ class AuboController : public IROSHardware
                     analog_inputs_ = parser.popVectorDouble();
                     // NEW ESTOP IMMEDIATE:
                     estopped_ = (config_dout_bits_&0x01UL) == 0x01UL;
-                    // robot_messages_ = parser.popRobotMsgVector(); // , "R1_message" type is null exception
+
                     rtde_input_data_valid_=true;
                 });
 
@@ -666,6 +670,9 @@ class AuboController : public IROSHardware
             TOOL_IO_inputs_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::UInt64>(node_handle, "tool_io_inputs", 1));
             TOOL_IO_inputs_pub_->msg_.data=0;
 
+            configurable_dout_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::UInt64>(node_handle, "configurable_outputs", 1));
+            configurable_dout_pub_->msg_.data=0;
+
             power_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::Float64>(node_handle, "power", 1));
             power_pub_->msg_.data=0.0;
 
@@ -754,12 +761,17 @@ class AuboController : public IROSHardware
                 }
                 analog_pub_->unlockAndPublish();
 
-
                 if (TOOL_IO_inputs_pub_->trylock())
                 {
                     TOOL_IO_inputs_pub_->msg_.data = (int64_t)TOOL_IO_inputs_;
                 }
                 TOOL_IO_inputs_pub_->unlockAndPublish();
+
+                if (configurable_dout_pub_->trylock())
+                {
+                    configurable_dout_pub_->msg_.data = (int64_t)config_dout_bits_;
+                }
+                configurable_dout_pub_->unlockAndPublish();
 
             }
 
@@ -785,9 +797,6 @@ class AuboController : public IROSHardware
             //         ROS_WARN("[AUBO HW] robot msg comes with arg: %s", arg.c_str());
             //     }
             // }
-
-            // ROS_WARN("[AUBO HW] safety status bits: %04X", safety_status_bits_);
-            // ROS_WARN("[AUBO HW] cdout status bits: %016lX", config_dout_bits_);
 
         }
 
@@ -906,7 +915,7 @@ class AuboController : public IROSHardware
                     res.message = msg;
                     return(true);
                 }
-
+                
                 // Wait for the robot arm to enter running mode
                 if (!waitForRobotMode(RobotModeType::Running))
                 {
@@ -917,7 +926,16 @@ class AuboController : public IROSHardware
                     return(true);
                 }
 
+                std::this_thread::sleep_for(std::chrono::seconds(1));
                 robot_mode = (int) robot_interface_->getRobotState()->getRobotModeType();
+                if((int)RobotModeType::Running != robot_mode)
+                {
+                    msg += "::Robot did not stay in running mode";
+                    ros_error(msg);
+                    res.message = msg;
+                    res.success = false;
+                    return(true);
+                }
                 msg += "::The robot arm released the brake successfully, current mode: " + std::to_string(robot_mode);
                 ROS_INFO("[AUBO HW] The robot arm released the brake successfully, current mode: %d", robot_mode);
             }
@@ -1496,6 +1514,11 @@ int main(int argc, char** argv){
             if(read_missed>5)
             {
                 ROS_WARN_THROTTLE(1, "[AUBO HW] %d consecutive reads missed", read_missed);
+            }
+            if(read_missed>500)
+            {
+                ROS_FATAL("[AUBO HW] Too many reads missed, terminating driver.");
+                break;
             }
         }else{
             read_missed=0;
