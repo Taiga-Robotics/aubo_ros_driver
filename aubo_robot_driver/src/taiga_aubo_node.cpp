@@ -373,7 +373,7 @@ class AuboController : public IROSHardware
             // subscribe to an RTDE stream for IO data @ 20Hz
             topic1 = rtde_client_->setTopic(false, { "R1_standard_digital_input_bits", "R1_tool_digital_input_bits", 
                 "R1_configurable_digital_output_bits", "R1_standard_digital_output_bits", "R1_tool_analog_input_values",
-                 "R1_standard_analog_input_values"}, 20, 1);
+                 "R1_standard_analog_input_values"}, 50, 1);
 
             rtde_client_->subscribe(topic1, [this](InputParser &parser) 
                 {
@@ -1550,10 +1550,10 @@ int main(int argc, char** argv){
         hb_pub.publish(hb_msg);
 
         // maintain robot ancillary data
-        if((now - last_low_freq_pub_time) > ros::Duration((1.0/20.0)))
+        if((now - last_low_freq_pub_time) > ros::Duration((1.0/50.0)))
         {
             hw.publish_ancillary_data();
-            last_low_freq_pub_time += ros::Duration((1.0/20.0));
+            last_low_freq_pub_time += ros::Duration((1.0/50.0));
         }
 
         loops++;
