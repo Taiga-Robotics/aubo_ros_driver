@@ -49,7 +49,7 @@ class AuboController : public IROSHardware
     double timestamp_=0.0, last_rtde_timestamp_=-1.0;
     std::vector<double> actual_q_{ std::vector<double>(6, 0.) };
     std::vector<double> actual_qd_{ std::vector<double>(6, 0.) };
-    std::vector<double> actual_qdd_{ std::vector<double>(6, 0.) };
+    std::vector<double> joint_current_{ std::vector<double>(6, 0.) };
     std::vector<double> actual_TCP_pose_{ std::vector<double>(6, 0.) };
     RobotModeType robot_mode_ = RobotModeType::NoController;
     RobotControlModeType robot_control_mode_ = RobotControlModeType::Unknown;
@@ -205,7 +205,7 @@ class AuboController : public IROSHardware
                     {
                         joint_pos_[jnt] = actual_q_[jnt];
                         joint_vel_[jnt] = actual_qd_[jnt];
-                        joint_eff_[jnt] = actual_qdd_[jnt]; 
+                        joint_eff_[jnt] = joint_current_[jnt]; 
                     }
                     rtde_data_valid_ = false;
                     data_valid_ = true; //latch for now
@@ -341,7 +341,7 @@ class AuboController : public IROSHardware
             // subscribe to an RTDE stream for robot position data
             int topic1 = rtde_client_->setTopic(false,
                 {"R1_actual_q", "R1_actual_qd", "R1_robot_mode", "R1_safety_mode",
-                "runtime_state", "line_number", "R1_actual_TCP_pose", "R1_actual_qdd", "R1_actual_robot_current",
+                "runtime_state", "line_number", "R1_actual_TCP_pose", "R1_actual_current", "R1_actual_robot_current",
                  "R1_target_q", "R1_target_qd", "R1_target_qdd"},
                 control_hz_, 0);
 
@@ -356,7 +356,7 @@ class AuboController : public IROSHardware
                     runtime_state_ = parser.popRuntimeState();
                     line_ = parser.popInt32();
                     actual_TCP_pose_ = parser.popVectorDouble();
-                    actual_qdd_ = parser.popVectorDouble();
+                    joint_current_ = parser.popVectorDouble();
                     current_ = parser.popDouble();
                     target_q_ = parser.popVectorDouble();
                     target_qd_ = parser.popVectorDouble();
