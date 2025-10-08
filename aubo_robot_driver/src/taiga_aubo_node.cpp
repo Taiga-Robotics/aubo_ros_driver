@@ -49,6 +49,7 @@ class AuboController : public IROSHardware
     double timestamp_=0.0, last_rtde_timestamp_=-1.0;
     std::vector<double> actual_q_{ std::vector<double>(6, 0.) };
     std::vector<double> actual_qd_{ std::vector<double>(6, 0.) };
+    std::vector<double> actual_qdd_{ std::vector<double>(6, 0.) };
     std::vector<double> joint_current_{ std::vector<double>(6, 0.) };
     std::vector<double> actual_TCP_pose_{ std::vector<double>(6, 0.) };
     RobotModeType robot_mode_ = RobotModeType::NoController;
@@ -77,6 +78,7 @@ class AuboController : public IROSHardware
     std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::String> > diag_pub_;
     std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray> > cmd_out_pub_;
     std::shared_ptr<realtime_tools::RealtimePublisher<sensor_msgs::JointState> > target_out_pub_;
+    std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray> > actual_qdd_pub_;
     std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Float64> > power_pub_;
     std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Bool> > estop_pub_;
     std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Int64> > robot_control_mode_pub_;
@@ -342,7 +344,7 @@ class AuboController : public IROSHardware
             int topic1 = rtde_client_->setTopic(false,
                 {"R1_actual_q", "R1_actual_qd", "R1_robot_mode", "R1_safety_mode",
                 "runtime_state", "line_number", "R1_actual_TCP_pose", "R1_actual_current", "R1_actual_robot_current",
-                 "R1_target_q", "R1_target_qd", "R1_target_qdd"},
+                 "R1_target_q", "R1_target_qd", "R1_target_qdd", "R1_actual_qdd"},
                 control_hz_, 0);
 
             rtde_client_->subscribe(topic1, [this](InputParser &parser) 
@@ -361,16 +363,16 @@ class AuboController : public IROSHardware
                     target_q_ = parser.popVectorDouble();
                     target_qd_ = parser.popVectorDouble();
                     target_qdd_ = parser.popVectorDouble();
+                    actual_qdd_ = parser.popVectorDouble();
                     rtde_data_valid_=true;
                     // process autoactive bool immediately
                     if(((safety_mode_ == SafetyModeType::Normal) || (safety_mode_ == SafetyModeType::ReducedMode)) && (robot_mode_ == RobotModeType::Running))  
                         auto_active_ = false;
                     else
                         auto_active_ = true;
-
                 });
 
-            // subscribe to an RTDE stream for IO data @ 20Hz
+            // subscribe to an RTDE stream for IO data @ 50Hz
             topic1 = rtde_client_->setTopic(false, { "R1_standard_digital_input_bits", "R1_tool_digital_input_bits", 
                 "R1_configurable_digital_output_bits", "R1_standard_digital_output_bits", "R1_tool_analog_input_values",
                  "R1_standard_analog_input_values"}, 50, 1);
@@ -511,6 +513,14 @@ class AuboController : public IROSHardware
                 return 0;
             }
             
+            // give the robot time to steady
+            ROS_INFO("[AUBO HW] waiting for robot steady in deactivate()...");
+            for(int i=0; i<10; i++)
+            {
+                if(robot_interface_->getRobotState()->isSteady()) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+
             // Turn off servo mode
             ROS_INFO("[AUBO HW] Deactivating...");
             robot_interface_->getMotionControl()->setServoMode(false);
@@ -638,7 +648,9 @@ class AuboController : public IROSHardware
             target_out_pub_->msg_.position.resize(6);
             target_out_pub_->msg_.velocity.resize(6);
             target_out_pub_->msg_.effort.resize(6);
-            // target_out_pub_->msg_.
+            
+            actual_qdd_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray>(node_handle, "actual_qdd", 1));
+            actual_qdd_pub_->msg_.data.resize(6);
             
             robot_mode_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::Int64>(node_handle, "robot_mode", 1));
             robot_mode_pub_->msg_.data=-1000;
@@ -732,6 +744,14 @@ class AuboController : public IROSHardware
                     power_pub_->msg_.data = 48.0*current_;
                 }
                 power_pub_->unlockAndPublish();
+            
+                if (actual_qdd_pub_->trylock())
+                {
+                    actual_qdd_pub_->msg_.data = actual_qdd_;
+                }
+                actual_qdd_pub_->unlockAndPublish();
+                
+            
             }
             {
                 //scope for rtde input republisher
