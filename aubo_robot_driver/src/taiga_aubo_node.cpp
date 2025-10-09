@@ -214,16 +214,16 @@ class AuboController : public IROSHardware
                     ret=0;
 
                 }
-                if (target_out_pub_->trylock())
-                {
-                    for(int jid=0; jid<num_joints_; jid++)
-                    {
-                        target_out_pub_->msg_.position[jid] = target_q_[jid];
-                        target_out_pub_->msg_.velocity[jid] = target_qd_[jid];
-                        target_out_pub_->msg_.effort[jid] = target_qdd_[jid];
-                    }
-                }
-                target_out_pub_->unlockAndPublish();
+                // if (target_out_pub_->trylock())
+                // {
+                //     for(int jid=0; jid<num_joints_; jid++)
+                //     {
+                //         target_out_pub_->msg_.position[jid] = target_q_[jid];
+                //         target_out_pub_->msg_.velocity[jid] = target_qd_[jid];
+                //         target_out_pub_->msg_.effort[jid] = target_qdd_[jid];
+                //     }
+                // }
+                // target_out_pub_->unlockAndPublish();
             }
 
             return ret;
