@@ -1070,8 +1070,15 @@ class AuboController : public IROSHardware
             res.success=false;
             if(req.fun==req.FUN_SET_DIGITAL_OUT)
             {
-                if(0==robot_interface_->getIoControl()->setStandardDigitalOutput(req.pin, req.state))
+                int ret = robot_interface_->getIoControl()->setStandardDigitalOutput(req.pin, req.state);
+                if(0==ret)
+                {
                     res.success=true;
+                }
+                else
+                {
+                    ros_error("Could not set digital output. Error Code: " + std::to_string(ret));
+                }
             }
             return(true);
         }

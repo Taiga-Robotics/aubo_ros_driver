@@ -1,5 +1,15 @@
 # aubo_ros_driver
 
+# possible improvement:
+```
+ rpc_client_->getRobotInterface(robot_name_)
+    ->getRobotConfig()
+    ->setHardwareCustomParameters("[joint_func] \n vff_enable = false\n");
+```
+introduced in commit on factory driver: https://github.com/AuboRobot/aubo_ros_driver/commit/660d74bb13ae5476e199db84f241cde0989c5fb4   
+how does the motion change with velicty feed forward shut off?
+
+
 遨博机器人ROS驱动,在kinetic\melotic\noetic上通过编译、运行测试
 
 # 安装所需工具(修改对应ros版本)
